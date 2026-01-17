@@ -1,0 +1,514 @@
+//! Synheart Sensor Agent CLI
+//!
+//! Privacy-first behavioral sensor for research.
+
+use chrono::Utc;
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use synheart_sensor_agent::{
+    collector::{check_permission, Collector, CollectorConfig, SensorEvent},
+    config::{Config, SourceConfig},
+    core::{compute_features, HsiBuilder, HsiSnapshot, WindowManager},
+    transparency::create_shared_log_with_persistence,
+    PRIVACY_DECLARATION, VERSION,
+};
+
+#[derive(Parser)]
+#[command(name = "synheart-sensor")]
+#[command(author = "Synheart")]
+#[command(version = VERSION)]
+#[command(about = "Privacy-first behavioral sensor for research", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start capturing behavioral data
+    Start {
+        /// Input sources to capture (keyboard, mouse, or all)
+        #[arg(long, default_value = "all")]
+        sources: String,
+
+        /// Run in foreground (don't daemonize)
+        #[arg(long)]
+        foreground: bool,
+    },
+
+    /// Pause data collection
+    Pause,
+
+    /// Resume data collection
+    Resume,
+
+    /// Show current collection status
+    Status,
+
+    /// Display privacy declaration
+    Privacy,
+
+    /// Export collected HSI snapshots
+    Export {
+        /// Output directory for snapshots
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+
+        /// Export format (json or jsonl)
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
+
+    /// Show configuration
+    Config,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Start {
+            sources,
+            foreground,
+        } => {
+            cmd_start(&sources, foreground);
+        }
+        Commands::Pause => {
+            cmd_pause();
+        }
+        Commands::Resume => {
+            cmd_resume();
+        }
+        Commands::Status => {
+            cmd_status();
+        }
+        Commands::Privacy => {
+            cmd_privacy();
+        }
+        Commands::Export { output, format } => {
+            cmd_export(output, &format);
+        }
+        Commands::Config => {
+            cmd_config();
+        }
+    }
+}
+
+fn cmd_start(sources: &str, _foreground: bool) {
+    println!("Synheart Sensor Agent v{VERSION}");
+    println!();
+
+    // Check for Input Monitoring permission
+    if !check_permission() {
+        eprintln!("Error: Input Monitoring permission not granted.");
+        eprintln!();
+        eprintln!("To grant permission:");
+        eprintln!("1. Open System Preferences > Security & Privacy > Privacy");
+        eprintln!("2. Select 'Input Monitoring' in the left sidebar");
+        eprintln!("3. Add this application to the allowed list");
+        eprintln!("4. Restart the application");
+        std::process::exit(1);
+    }
+
+    // Parse source configuration
+    let source_config = SourceConfig::from_csv(sources);
+    if !source_config.any_enabled() {
+        eprintln!("Error: At least one source must be enabled (keyboard or mouse)");
+        std::process::exit(1);
+    }
+
+    // Load or create configuration
+    let config = Config::load().unwrap_or_default();
+    if let Err(e) = config.ensure_directories() {
+        eprintln!("Warning: Could not create directories: {e}");
+    }
+
+    println!("Starting collection...");
+    println!(
+        "  Keyboard: {}",
+        if source_config.keyboard {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Mouse: {}",
+        if source_config.mouse {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!("  Window duration: {}s", config.window_duration.as_secs());
+    println!();
+    println!("Press Ctrl+C to stop");
+    println!();
+
+    // Set up transparency log
+    let transparency_log =
+        create_shared_log_with_persistence(config.data_path.join("transparency.json"));
+
+    // Create collector
+    let collector_config = CollectorConfig {
+        capture_keyboard: source_config.keyboard,
+        capture_mouse: source_config.mouse,
+    };
+    let mut collector = Collector::new(collector_config);
+
+    // Create window manager
+    let mut window_manager = WindowManager::new(
+        config.window_duration.as_secs(),
+        config.session_gap_threshold_secs,
+    );
+
+    // Create HSI builder
+    let hsi_builder = HsiBuilder::new();
+    println!("Instance ID: {}", hsi_builder.instance_id());
+
+    // Storage for completed snapshots
+    let mut snapshots: Vec<HsiSnapshot> = Vec::new();
+
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc_handler(r);
+
+    // Support pause/resume from another process by polling the config file.
+    // If paused at startup, wait until resumed before starting the collector.
+    let mut paused = config.paused;
+    let mut last_config_check = std::time::Instant::now();
+
+    if paused {
+        println!("Collection is currently paused.");
+        println!("Run `synheart-sensor resume` to start collecting.");
+        println!();
+    } else if let Err(e) = collector.start() {
+        eprintln!("Error starting collector: {e}");
+        std::process::exit(1);
+    }
+
+    // Main event loop
+    let receiver = collector.receiver().clone();
+    let mut last_window_check = std::time::Instant::now();
+
+    while running.load(Ordering::SeqCst) {
+        // Periodically reload config so `synheart-sensor pause/resume` can control a running agent.
+        if last_config_check.elapsed() >= Duration::from_secs(1) {
+            if let Ok(cfg) = Config::load() {
+                if cfg.paused != paused {
+                    paused = cfg.paused;
+
+                    if paused {
+                        println!();
+                        println!("Pausing collection...");
+                        collector.stop();
+
+                        // Flush any in-progress window and drop partial data.
+                        window_manager.flush();
+                        let _ = window_manager.take_completed_windows();
+
+                        // Drain any queued events.
+                        while receiver.try_recv().is_ok() {}
+                    } else {
+                        println!();
+                        println!("Resuming collection...");
+                        if let Err(e) = collector.start() {
+                            eprintln!("Error resuming collector: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            last_config_check = std::time::Instant::now();
+        }
+
+        if paused {
+            thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+
+        // Process events with timeout
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(event) => {
+                // Update transparency log
+                match &event {
+                    SensorEvent::Keyboard(_) => transparency_log.record_keyboard_event(),
+                    SensorEvent::Mouse(_) => transparency_log.record_mouse_event(),
+                }
+
+                // Add to window
+                window_manager.process_event(event);
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                // Check for window expiry periodically
+                if last_window_check.elapsed() >= Duration::from_secs(1) {
+                    window_manager.check_window_expiry();
+                    last_window_check = std::time::Instant::now();
+                }
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                eprintln!("Collector disconnected unexpectedly");
+                break;
+            }
+        }
+
+        // Process completed windows
+        for window in window_manager.take_completed_windows() {
+            let features = compute_features(&window);
+            let snapshot = hsi_builder.build(&window, &features);
+
+            transparency_log.record_window_completed();
+
+            println!(
+                "[{}] Window completed: {} keyboard, {} mouse events",
+                window.end.format("%H:%M:%S"),
+                window.keyboard_events.len(),
+                window.mouse_events.len()
+            );
+
+            snapshots.push(snapshot);
+        }
+    }
+
+    // Stop collection
+    println!();
+    println!("Stopping collection...");
+    collector.stop();
+
+    // Flush remaining window
+    window_manager.flush();
+    for window in window_manager.take_completed_windows() {
+        let features = compute_features(&window);
+        let snapshot = hsi_builder.build(&window, &features);
+        transparency_log.record_window_completed();
+        snapshots.push(snapshot);
+    }
+
+    // Save transparency log
+    if let Err(e) = transparency_log.save() {
+        eprintln!("Warning: Could not save transparency log: {e}");
+    }
+
+    // Export snapshots
+    if !snapshots.is_empty() {
+        let export_path = config.export_path.join(format!(
+            "session_{}.json",
+            Utc::now().format("%Y%m%d_%H%M%S")
+        ));
+
+        if let Some(parent) = export_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match serde_json::to_string_pretty(&snapshots) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&export_path, json) {
+                    eprintln!("Error writing snapshots: {e}");
+                } else {
+                    println!(
+                        "Exported {} snapshots to {:?}",
+                        snapshots.len(),
+                        export_path
+                    );
+                    for _ in &snapshots {
+                        transparency_log.record_snapshot_exported();
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error serializing snapshots: {e}");
+            }
+        }
+    }
+
+    // Final stats
+    println!();
+    println!("{}", transparency_log.summary());
+}
+
+fn cmd_pause() {
+    let mut config = Config::load().unwrap_or_default();
+    config.paused = true;
+    if let Err(e) = config.save() {
+        eprintln!("Error saving config: {e}");
+        std::process::exit(1);
+    }
+    println!("Collection paused. Use 'synheart-sensor resume' to continue.");
+}
+
+fn cmd_resume() {
+    let mut config = Config::load().unwrap_or_default();
+    config.paused = false;
+    if let Err(e) = config.save() {
+        eprintln!("Error saving config: {e}");
+        std::process::exit(1);
+    }
+    println!("Collection resumed.");
+}
+
+fn cmd_status() {
+    let config = Config::load().unwrap_or_default();
+
+    println!("Synheart Sensor Agent Status");
+    println!("============================");
+    println!();
+
+    // Check permission
+    let has_permission = check_permission();
+    println!(
+        "Input Monitoring Permission: {}",
+        if has_permission {
+            "Granted ✓"
+        } else {
+            "Not Granted ✗"
+        }
+    );
+    println!();
+
+    // Show config
+    println!("Configuration:");
+    println!(
+        "  Keyboard capture: {}",
+        if config.sources.keyboard {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Mouse capture: {}",
+        if config.sources.mouse {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!("  Window duration: {}s", config.window_duration.as_secs());
+    println!("  Paused: {}", config.paused);
+    println!();
+
+    // Load and show transparency stats if available
+    let stats_path = config.data_path.join("transparency.json");
+    if stats_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&stats_path) {
+            if let Ok(stats) = serde_json::from_str::<serde_json::Value>(&content) {
+                println!("Cumulative Statistics:");
+                if let Some(kb) = stats.get("keyboard_events") {
+                    println!("  Keyboard events: {kb}");
+                }
+                if let Some(mouse) = stats.get("mouse_events") {
+                    println!("  Mouse events: {mouse}");
+                }
+                if let Some(windows) = stats.get("windows_completed") {
+                    println!("  Windows completed: {windows}");
+                }
+                if let Some(snapshots) = stats.get("snapshots_exported") {
+                    println!("  Snapshots exported: {snapshots}");
+                }
+            }
+        }
+    } else {
+        println!("No previous session data found.");
+    }
+}
+
+fn cmd_privacy() {
+    println!("{PRIVACY_DECLARATION}");
+}
+
+fn cmd_export(output: Option<PathBuf>, format: &str) {
+    let config = Config::load().unwrap_or_default();
+    let export_dir = output.unwrap_or(config.export_path.clone());
+
+    // Find all session files
+    let session_files: Vec<PathBuf> = std::fs::read_dir(&export_dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if session_files.is_empty() {
+        println!("No session data found in {export_dir:?}");
+        println!("Run 'synheart-sensor start' to begin collecting data.");
+        return;
+    }
+
+    println!(
+        "Found {} session file(s) in {:?}",
+        session_files.len(),
+        export_dir
+    );
+
+    // Combine all snapshots
+    let mut all_snapshots: Vec<HsiSnapshot> = Vec::new();
+    for file in &session_files {
+        if let Ok(content) = std::fs::read_to_string(file) {
+            if let Ok(snapshots) = serde_json::from_str::<Vec<HsiSnapshot>>(&content) {
+                all_snapshots.extend(snapshots);
+            }
+        }
+    }
+
+    println!("Total snapshots: {}", all_snapshots.len());
+
+    // Export based on format
+    let output_path = export_dir.join(format!(
+        "export_{}.{}",
+        Utc::now().format("%Y%m%d_%H%M%S"),
+        if format == "jsonl" { "jsonl" } else { "json" }
+    ));
+
+    let result = if format == "jsonl" {
+        // JSON Lines format
+        let lines: Vec<String> = all_snapshots
+            .iter()
+            .filter_map(|s| serde_json::to_string(s).ok())
+            .collect();
+        std::fs::write(&output_path, lines.join("\n"))
+    } else {
+        // Pretty JSON format
+        match serde_json::to_string_pretty(&all_snapshots) {
+            Ok(json) => std::fs::write(&output_path, json),
+            Err(e) => {
+                eprintln!("Error serializing: {e}");
+                return;
+            }
+        }
+    };
+
+    match result {
+        Ok(_) => println!("Exported to {output_path:?}"),
+        Err(e) => eprintln!("Error writing export: {e}"),
+    }
+}
+
+fn cmd_config() {
+    let config = Config::load().unwrap_or_default();
+
+    println!("Configuration");
+    println!("=============");
+    println!();
+    println!("Config file: {:?}", Config::config_path());
+    println!();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&config).unwrap_or_else(|_| "Error".to_string())
+    );
+}
+
+/// Set up Ctrl+C handler.
+fn ctrlc_handler(running: Arc<AtomicBool>) {
+    ctrlc::set_handler(move || {
+        running.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl+C handler");
+}

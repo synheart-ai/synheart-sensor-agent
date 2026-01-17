@@ -1,0 +1,86 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please fill out the form below.
+
+        **Important**: All features must maintain our strict privacy guarantees.
+        Features that capture key content, cursor coordinates, or application context
+        will not be considered.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: A clear and concise description of the feature
+      placeholder: Describe the feature you'd like...
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Why do you need this feature? What problem does it solve?
+      placeholder: |
+        I want this feature because...
+        This would help with...
+    validations:
+      required: true
+
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy Analysis
+      description: |
+        How does this feature affect privacy? What data would be captured?
+        Explain how this maintains our privacy guarantees.
+      placeholder: |
+        This feature would only capture...
+        No personal data is involved because...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: How would you like this feature to work?
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any alternative approaches?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Nice to have
+        - Would be helpful
+        - Important for my use case
+        - Critical blocker
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: privacy-acknowledgment
+    attributes:
+      label: Privacy Acknowledgment
+      options:
+        - label: I understand that features capturing key content, cursor coordinates, or application context will not be accepted
+          required: true
+        - label: I believe this feature can be implemented while maintaining privacy guarantees
+          required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or examples

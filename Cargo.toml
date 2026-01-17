@@ -1,0 +1,49 @@
+[package]
+name = "synheart-sensor-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Privacy-first PC background sensor for behavioral research"
+license = "Apache-2.0"
+repository = "https://github.com/synheart/synheart-sensor-agent"
+rust-version = "1.70"
+
+[[bin]]
+name = "synheart-sensor"
+path = "src/main.rs"
+
+[dependencies]
+# macOS event capture
+core-graphics = "0.24"
+core-foundation = "0.10"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Unique identifiers
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Cross-thread communication
+crossbeam-channel = "0.5"
+
+# Statistics
+statrs = "0.17"
+
+# Directories for config/data storage
+dirs = "5.0"
+
+# Signal handling
+ctrlc = "3.4"
+
+[[example]]
+name = "capture_demo"
+path = "examples/capture_demo.rs"
