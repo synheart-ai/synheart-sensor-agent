@@ -39,7 +39,7 @@ crossbeam-channel = "0.5"
 statrs = "0.17"
 
 # Directories for config/data storage
-dirs = "5.0"
+dirs = "6.0"
 
 # Signal handling
 ctrlc = "3.4"
