@@ -1,6 +1,6 @@
 # Synheart Sensor Agent
 
-[![CI](https://github.com/synheart/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/synheart/synheart-sensor-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/synheart-ai/synheart-sensor-agent/.github/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
