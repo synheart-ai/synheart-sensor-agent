@@ -49,11 +49,18 @@ pub mod config;
 pub mod core;
 pub mod transparency;
 
+#[cfg(feature = "flux")]
+pub mod flux;
+
 // Re-export key types at crate root for convenience
 pub use collector::{Collector, CollectorConfig, CollectorError, SensorEvent};
 pub use config::{Config, SourceConfig};
 pub use core::{compute_features, HsiBuilder, HsiSnapshot, WindowFeatures, WindowManager};
 pub use transparency::{SharedTransparencyLog, TransparencyLog, TransparencyStats};
+
+// Flux re-exports (when enabled)
+#[cfg(feature = "flux")]
+pub use flux::{EnrichedSnapshot, SensorFluxProcessor};
 
 /// Library version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
