@@ -34,5 +34,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All data processed locally
 - Raw events discarded after each 10-second window
 
-[Unreleased]: https://github.com/synheart/synheart-sensor-agent/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/synheart/synheart-sensor-agent/releases/tag/v0.1.0
+[Unreleased]: https://github.com/synheart-ai/synheart-sensor-agent/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/synheart-ai/synheart-sensor-agent/releases/tag/v0.1.0

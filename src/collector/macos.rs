@@ -7,6 +7,7 @@ use crate::collector::types::{KeyboardEvent, MouseEvent, SensorEvent};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+    CallbackResult,
 };
 use crossbeam_channel::{bounded, Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -185,7 +186,7 @@ fn run_event_loop(
         _proxy: core_graphics::event::CGEventTapProxy,
         event_type: CGEventType,
         event: &CGEvent,
-    ) -> Option<CGEvent> {
+    ) -> CallbackResult {
         thread_local! {
             static EVENT_SENDER: std::cell::RefCell<Option<Sender<SensorEvent>>> = const { std::cell::RefCell::new(None) };
         }
@@ -201,7 +202,7 @@ fn run_event_loop(
         });
 
         // Return the event unchanged (we're passive observers)
-        Some(event.clone())
+        CallbackResult::Keep
     }
 
     // Create the event tap
@@ -216,7 +217,7 @@ fn run_event_loop(
 
     // Create the run loop source
     let source = tap
-        .mach_port
+        .mach_port()
         .create_runloop_source(0)
         .map_err(|_| CollectorError::RunLoopSourceFailed)?;
 
@@ -309,7 +310,7 @@ pub fn check_permission() -> bool {
         CGEventTapPlacement::HeadInsertEventTap,
         CGEventTapOptions::ListenOnly,
         vec![CGEventType::KeyDown],
-        |_proxy, _type, event| Some(event.clone()),
+        |_proxy, _type, _event| CallbackResult::Keep,
     );
 
     result.is_ok()
