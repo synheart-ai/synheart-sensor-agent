@@ -52,6 +52,9 @@ pub mod transparency;
 #[cfg(feature = "flux")]
 pub mod flux;
 
+#[cfg(feature = "gateway")]
+pub mod gateway;
+
 // Re-export key types at crate root for convenience
 pub use collector::{Collector, CollectorConfig, CollectorError, SensorEvent};
 pub use config::{Config, SourceConfig};
@@ -61,6 +64,12 @@ pub use transparency::{SharedTransparencyLog, TransparencyLog, TransparencyStats
 // Flux re-exports (when enabled)
 #[cfg(feature = "flux")]
 pub use flux::{EnrichedSnapshot, SensorFluxProcessor};
+
+// Gateway re-exports (when enabled)
+#[cfg(feature = "gateway")]
+pub use gateway::{
+    BlockingGatewayClient, GatewayClient, GatewayConfig, GatewayError, GatewayResponse, HsiState,
+};
 
 /// Library version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
