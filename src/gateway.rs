@@ -41,8 +41,7 @@ impl GatewayConfig {
 
         let port_str = std::fs::read_to_string(&port_path).map_err(|e| {
             GatewayError::Config(format!(
-                "Failed to read gateway port from {:?}: {}",
-                port_path, e
+                "Failed to read gateway port from {port_path:?}: {e}"
             ))
         })?;
 
@@ -53,8 +52,7 @@ impl GatewayConfig {
         let token = std::fs::read_to_string(&token_path)
             .map_err(|e| {
                 GatewayError::Config(format!(
-                    "Failed to read gateway token from {:?}: {}",
-                    token_path, e
+                    "Failed to read gateway token from {token_path:?}: {e}"
                 ))
             })?
             .trim()
@@ -120,12 +118,12 @@ pub enum GatewayError {
 impl std::fmt::Display for GatewayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GatewayError::Config(msg) => write!(f, "Gateway config error: {}", msg),
-            GatewayError::Network(msg) => write!(f, "Gateway network error: {}", msg),
+            GatewayError::Config(msg) => write!(f, "Gateway config error: {msg}"),
+            GatewayError::Network(msg) => write!(f, "Gateway network error: {msg}"),
             GatewayError::Server { status, message } => {
-                write!(f, "Gateway server error ({}): {}", status, message)
+                write!(f, "Gateway server error ({status}): {message}")
             }
-            GatewayError::Serialization(msg) => write!(f, "Gateway serialization error: {}", msg),
+            GatewayError::Serialization(msg) => write!(f, "Gateway serialization error: {msg}"),
         }
     }
 }
@@ -198,7 +196,7 @@ impl std::fmt::Display for HsiState {
         let focus = self.focus.as_deref().unwrap_or("unknown");
         let load = self.load.as_deref().unwrap_or("unknown");
         let recovery = self.recovery.as_deref().unwrap_or("unknown");
-        write!(f, "focus: {}, load: {}, recovery: {}", focus, load, recovery)
+        write!(f, "focus: {focus}, load: {load}, recovery: {recovery}")
     }
 }
 
@@ -223,7 +221,11 @@ impl GatewayClient {
         let hostname = hostname::get()
             .map(|h| h.to_string_lossy().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
-        let device_id = format!("sensor-{}-{}", hostname, &uuid::Uuid::new_v4().to_string()[..8]);
+        let device_id = format!(
+            "sensor-{}-{}",
+            hostname,
+            &uuid::Uuid::new_v4().to_string()[..8]
+        );
 
         Self {
             config,
@@ -242,7 +244,7 @@ impl GatewayClient {
     pub async fn test_connection(&self) -> Result<bool, GatewayError> {
         let response = self
             .client
-            .get(&self.config.health_url())
+            .get(self.config.health_url())
             .send()
             .await
             .map_err(|e| GatewayError::Network(e.to_string()))?;
@@ -290,7 +292,7 @@ impl GatewayClient {
 
         let response = self
             .client
-            .post(&self.config.ingest_url())
+            .post(self.config.ingest_url())
             .header("Authorization", format!("Bearer {}", self.config.token))
             .header("Content-Type", "application/json")
             .json(&session)
@@ -338,7 +340,7 @@ impl BlockingGatewayClient {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| GatewayError::Config(format!("Failed to create runtime: {}", e)))?;
+            .map_err(|e| GatewayError::Config(format!("Failed to create runtime: {e}")))?;
 
         Ok(Self {
             inner: GatewayClient::new(config),
@@ -381,7 +383,10 @@ mod tests {
     fn test_gateway_config_url() {
         let config = GatewayConfig::new("127.0.0.1", 8080, "test-token");
         assert_eq!(config.url(), "http://127.0.0.1:8080");
-        assert_eq!(config.ingest_url(), "http://127.0.0.1:8080/v1/ingest/behavioral");
+        assert_eq!(
+            config.ingest_url(),
+            "http://127.0.0.1:8080/v1/ingest/behavioral"
+        );
         assert_eq!(config.health_url(), "http://127.0.0.1:8080/health");
     }
 
@@ -392,7 +397,7 @@ mod tests {
             load: Some("moderate".to_string()),
             recovery: None,
         };
-        let display = format!("{}", state);
+        let display = format!("{state}");
         assert!(display.contains("high"));
         assert!(display.contains("moderate"));
     }

@@ -5,8 +5,8 @@
 
 use crate::collector::types::{KeyboardEvent, MouseEvent, MouseEventType};
 use crate::core::windowing::EventWindow;
-use synheart_flux::behavior::{BehaviorEvent, BehaviorEventType, BehaviorSession};
 use synheart_flux::behavior::types::{ScrollEvent, TapEvent, TypingEvent};
+use synheart_flux::behavior::{BehaviorEvent, BehaviorEventType, BehaviorSession};
 
 /// Adapter for converting sensor events to behavioral session format.
 pub struct SensorBehaviorAdapter {
@@ -17,7 +17,10 @@ pub struct SensorBehaviorAdapter {
 impl SensorBehaviorAdapter {
     /// Create a new adapter with device and timezone info.
     pub fn new(device_id: String, timezone: String) -> Self {
-        Self { device_id, timezone }
+        Self {
+            device_id,
+            timezone,
+        }
     }
 
     /// Create with system defaults.

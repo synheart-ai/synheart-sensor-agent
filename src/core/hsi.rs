@@ -146,7 +146,9 @@ impl Default for HsiPrivacy {
             contains_pii: false,
             raw_biosignals_allowed: false,
             derived_metrics_allowed: true,
-            notes: Some("No key content or coordinates captured - timing and magnitude only".to_string()),
+            notes: Some(
+                "No key content or coordinates captured - timing and magnitude only".to_string(),
+            ),
         }
     }
 }
@@ -377,7 +379,8 @@ impl HsiBuilder {
         meta.insert(
             "duration_secs".to_string(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(window.duration_secs()).unwrap_or(serde_json::Number::from(0)),
+                serde_json::Number::from_f64(window.duration_secs())
+                    .unwrap_or(serde_json::Number::from(0)),
             ),
         );
         meta.insert(
@@ -394,19 +397,22 @@ impl HsiBuilder {
         meta.insert(
             "raw_typing_rate".to_string(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(features.keyboard.typing_rate).unwrap_or(serde_json::Number::from(0)),
+                serde_json::Number::from_f64(features.keyboard.typing_rate)
+                    .unwrap_or(serde_json::Number::from(0)),
             ),
         );
         meta.insert(
             "raw_mean_velocity".to_string(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(features.mouse.mean_velocity).unwrap_or(serde_json::Number::from(0)),
+                serde_json::Number::from_f64(features.mouse.mean_velocity)
+                    .unwrap_or(serde_json::Number::from(0)),
             ),
         );
         meta.insert(
             "raw_click_rate".to_string(),
             serde_json::Value::Number(
-                serde_json::Number::from_f64(features.mouse.click_rate).unwrap_or(serde_json::Number::from(0)),
+                serde_json::Number::from_f64(features.mouse.click_rate)
+                    .unwrap_or(serde_json::Number::from(0)),
             ),
         );
 
@@ -503,7 +509,7 @@ mod tests {
             assert!(reading.confidence >= 0.0 && reading.confidence <= 1.0);
             assert!(!reading.window_id.is_empty());
             if let Some(score) = reading.score {
-                assert!(score >= 0.0 && score <= 1.0, "score out of range: {}", score);
+                assert!((0.0..=1.0).contains(&score), "score out of range: {score}");
             }
         }
     }

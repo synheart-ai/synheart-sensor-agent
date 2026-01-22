@@ -170,6 +170,7 @@ fn main() {
 }
 
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 fn cmd_start(
     sources: &str,
     _foreground: bool,
@@ -230,7 +231,7 @@ fn cmd_start(
     // Show flux status
     #[cfg(feature = "flux")]
     if enable_flux {
-        println!("  Flux baseline tracking: enabled (window: {} sessions)", baseline_window);
+        println!("  Flux baseline tracking: enabled (window: {baseline_window} sessions)");
     } else {
         println!("  Flux baseline tracking: disabled");
     }
@@ -244,7 +245,7 @@ fn cmd_start(
     let gateway_client = if enable_gateway {
         match create_gateway_client(gateway_port, gateway_token) {
             Ok(client) => {
-                println!("  Gateway sync: enabled (interval: {}s)", sync_interval);
+                println!("  Gateway sync: enabled (interval: {sync_interval}s)");
                 println!("  Device ID: {}", client.device_id());
 
                 // Test connection
@@ -313,7 +314,7 @@ fn cmd_start(
         if baselines_path.exists() {
             if let Ok(baselines_json) = std::fs::read_to_string(&baselines_path) {
                 match processor.load_baselines(&baselines_json) {
-                    Ok(_) => println!("Loaded existing baselines from {:?}", baselines_path),
+                    Ok(_) => println!("Loaded existing baselines from {baselines_path:?}"),
                     Err(e) => eprintln!("Warning: Could not load baselines: {e}"),
                 }
             }
@@ -533,11 +534,14 @@ fn cmd_start(
     #[cfg(feature = "gateway")]
     if let Some(ref client) = gateway_client {
         if !pending_sync_snapshots.is_empty() {
-            println!("Syncing remaining {} snapshots to gateway...", pending_sync_snapshots.len());
+            println!(
+                "Syncing remaining {} snapshots to gateway...",
+                pending_sync_snapshots.len()
+            );
             match client.sync_snapshots(&pending_sync_snapshots, &session_id) {
                 Ok(response) => {
                     if let Some(state) = response.state {
-                        println!("[Gateway] Final sync complete | HSI: {}", state);
+                        println!("[Gateway] Final sync complete | HSI: {state}");
                     } else {
                         println!("[Gateway] Final sync complete");
                     }
@@ -637,7 +641,7 @@ fn cmd_start(
                     if let Err(e) = std::fs::write(&baselines_path, baselines_json) {
                         eprintln!("Error saving baselines: {e}");
                     } else {
-                        println!("Saved baselines to {:?}", baselines_path);
+                        println!("Saved baselines to {baselines_path:?}");
                     }
                 }
                 Err(e) => {
@@ -655,8 +659,8 @@ fn cmd_start(
 /// Start HTTP server for receiving behavioral data from Chrome extension
 #[cfg(feature = "server")]
 fn cmd_serve(port: u16, gateway_host: &str, gateway_port: u16, gateway_token: &str) {
-    use synheart_sensor_agent::server::ServerConfig;
     use synheart_sensor_agent::gateway::GatewayConfig;
+    use synheart_sensor_agent::server::ServerConfig;
 
     println!("Synheart Sensor Agent v{VERSION}");
     println!();
@@ -694,9 +698,9 @@ fn cmd_serve(port: u16, gateway_host: &str, gateway_port: u16, gateway_token: &s
 
         match synheart_sensor_agent::server::run(server_config).await {
             Ok((addr, shutdown_tx)) => {
-                println!("Server listening on http://{}", addr);
+                println!("Server listening on http://{addr}");
                 println!();
-                println!("Chrome extension should POST to: http://{}/ingest", addr);
+                println!("Chrome extension should POST to: http://{addr}/ingest");
                 println!();
                 println!("Press Ctrl+C to stop");
                 println!();

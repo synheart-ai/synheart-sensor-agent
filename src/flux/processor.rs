@@ -156,12 +156,13 @@ impl SensorFluxProcessor {
 }
 
 /// Extract flux metrics from HSI JSON string.
-fn extract_flux_metrics_from_json(hsi_json: &str) -> Result<(Option<FluxBehaviorMetrics>, Option<BaselineInfo>), ComputeError> {
-    let payload: serde_json::Value = serde_json::from_str(hsi_json)
-        .map_err(|e| ComputeError::ParseError(e.to_string()))?;
+fn extract_flux_metrics_from_json(
+    hsi_json: &str,
+) -> Result<(Option<FluxBehaviorMetrics>, Option<BaselineInfo>), ComputeError> {
+    let payload: serde_json::Value =
+        serde_json::from_str(hsi_json).map_err(|e| ComputeError::ParseError(e.to_string()))?;
 
-    let windows = payload.get("behavior_windows")
-        .and_then(|w| w.as_array());
+    let windows = payload.get("behavior_windows").and_then(|w| w.as_array());
 
     let window = match windows {
         Some(w) if !w.is_empty() => &w[0],
@@ -171,14 +172,32 @@ fn extract_flux_metrics_from_json(hsi_json: &str) -> Result<(Option<FluxBehavior
     // Extract behavior metrics
     let behavior = window.get("behavior");
     let flux_behavior = behavior.map(|b| FluxBehaviorMetrics {
-        distraction_score: b.get("distraction_score").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        distraction_score: b
+            .get("distraction_score")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
         focus_hint: b.get("focus_hint").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        task_switch_rate: b.get("task_switch_rate").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        notification_load: b.get("notification_load").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        task_switch_rate: b
+            .get("task_switch_rate")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        notification_load: b
+            .get("notification_load")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
         burstiness: b.get("burstiness").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        scroll_jitter_rate: b.get("scroll_jitter_rate").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        interaction_intensity: b.get("interaction_intensity").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        deep_focus_blocks: b.get("deep_focus_blocks").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        scroll_jitter_rate: b
+            .get("scroll_jitter_rate")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        interaction_intensity: b
+            .get("interaction_intensity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        deep_focus_blocks: b
+            .get("deep_focus_blocks")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
     });
 
     // Extract baseline
@@ -187,7 +206,10 @@ fn extract_flux_metrics_from_json(hsi_json: &str) -> Result<(Option<FluxBehavior
         distraction: b.get("distraction").and_then(|v| v.as_f64()),
         focus: b.get("focus").and_then(|v| v.as_f64()),
         distraction_deviation_pct: b.get("distraction_deviation_pct").and_then(|v| v.as_f64()),
-        sessions_in_baseline: b.get("sessions_in_baseline").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        sessions_in_baseline: b
+            .get("sessions_in_baseline")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32,
     });
 
     Ok((flux_behavior, baseline))

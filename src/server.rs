@@ -13,7 +13,9 @@
 //!                                    [Flux Processing]
 //! ```
 
+use crate::core::HsiSnapshot;
 use crate::gateway::GatewayConfig;
+use crate::gateway::{BehavioralSession as GatewayBehavioralSession, SessionMeta, SessionPayload};
 use axum::{
     extract::State,
     http::{HeaderValue, StatusCode},
@@ -24,10 +26,6 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::core::HsiSnapshot;
-use crate::gateway::{
-    BehavioralSession as GatewayBehavioralSession, SessionMeta, SessionPayload,
-};
 use synheart_flux::BehaviorProcessor;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -73,7 +71,10 @@ impl ServerState {
         let mut processor = BehaviorProcessor::new();
 
         // Load baselines if they exist
-        let baseline_path = config.state_dir.join("state").join("behavior_baselines.json");
+        let baseline_path = config
+            .state_dir
+            .join("state")
+            .join("behavior_baselines.json");
         if baseline_path.exists() {
             if let Ok(json) = std::fs::read_to_string(&baseline_path) {
                 if let Err(e) = processor.load_baselines(&json) {
@@ -159,7 +160,7 @@ async fn ingest(
         (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: format!("Invalid session data: {}", e),
+                error: format!("Invalid session data: {e}"),
                 code: "INVALID_SESSION".to_string(),
             }),
         )
@@ -172,7 +173,7 @@ async fn ingest(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("Flux processing failed: {}", e),
+                    error: format!("Flux processing failed: {e}"),
                     code: "FLUX_ERROR".to_string(),
                 }),
             )
@@ -184,7 +185,7 @@ async fn ingest(
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to parse HSI output: {}", e),
+                error: format!("Failed to parse HSI output: {e}"),
                 code: "PARSE_ERROR".to_string(),
             }),
         )
@@ -240,7 +241,7 @@ async fn ingest(
             (
                 StatusCode::BAD_GATEWAY,
                 Json(ErrorResponse {
-                    error: format!("Gateway forwarding failed: {}", e),
+                    error: format!("Gateway forwarding failed: {e}"),
                     code: "GATEWAY_ERROR".to_string(),
                 }),
             )
@@ -256,7 +257,7 @@ async fn ingest(
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(ErrorResponse {
-                error: format!("Gateway returned error: {}", body),
+                error: format!("Gateway returned error: {body}"),
                 code: "GATEWAY_ERROR".to_string(),
             }),
         ));
@@ -273,7 +274,9 @@ async fn ingest(
 }
 
 /// Run the HTTP server
-pub async fn run(config: ServerConfig) -> anyhow::Result<(SocketAddr, tokio::sync::oneshot::Sender<()>)> {
+pub async fn run(
+    config: ServerConfig,
+) -> anyhow::Result<(SocketAddr, tokio::sync::oneshot::Sender<()>)> {
     let state = Arc::new(ServerState::new(&config));
 
     let app = Router::new()

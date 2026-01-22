@@ -2,10 +2,10 @@
 
 #[cfg(feature = "server")]
 mod server_tests {
-    use synheart_sensor_agent::gateway::GatewayConfig;
-    use synheart_sensor_agent::server::{run, ServerConfig};
     use std::path::PathBuf;
     use std::time::Duration;
+    use synheart_sensor_agent::gateway::GatewayConfig;
+    use synheart_sensor_agent::server::{run, ServerConfig};
 
     fn test_state_dir() -> PathBuf {
         std::env::temp_dir().join("synheart-server-test")
@@ -26,7 +26,7 @@ mod server_tests {
         // Test health endpoint
         let client = reqwest::Client::new();
         let response = client
-            .get(format!("http://{}/health", addr))
+            .get(format!("http://{addr}/health"))
             .send()
             .await
             .expect("Failed to send request");
@@ -93,7 +93,7 @@ mod server_tests {
 
         let client = reqwest::Client::new();
         let response = client
-            .post(format!("http://{}/ingest", addr))
+            .post(format!("http://{addr}/ingest"))
             .header("Content-Type", "application/json")
             .header("Authorization", "Bearer test-token")
             .json(&sample_session)
@@ -109,9 +109,7 @@ mod server_tests {
         // Either success (if gateway was running) or gateway error (expected in tests)
         assert!(
             status.is_success() || status == reqwest::StatusCode::BAD_GATEWAY,
-            "Unexpected status: {} - body: {:?}",
-            status,
-            body
+            "Unexpected status: {status} - body: {body:?}"
         );
 
         // If it's a gateway error, that means our server processed the request correctly
@@ -139,7 +137,7 @@ mod server_tests {
         // Send OPTIONS request to check CORS
         let client = reqwest::Client::new();
         let response = client
-            .request(reqwest::Method::OPTIONS, format!("http://{}/ingest", addr))
+            .request(reqwest::Method::OPTIONS, format!("http://{addr}/ingest"))
             .header("Origin", "http://localhost")
             .header("Access-Control-Request-Method", "POST")
             .send()
