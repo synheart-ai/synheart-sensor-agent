@@ -67,6 +67,26 @@ enum Commands {
         sync_interval: u64,
     },
 
+    /// Start HTTP server to receive behavioral data from Chrome extension
+    #[cfg(feature = "server")]
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value = "8081")]
+        port: u16,
+
+        /// Gateway host
+        #[arg(long, default_value = "127.0.0.1")]
+        gateway_host: String,
+
+        /// Gateway port
+        #[arg(long, default_value = "8080")]
+        gateway_port: u16,
+
+        /// Gateway auth token
+        #[arg(long)]
+        gateway_token: String,
+    },
+
     /// Pause data collection
     Pause,
 
@@ -118,6 +138,15 @@ fn main() {
                 gateway_token,
                 sync_interval,
             );
+        }
+        #[cfg(feature = "server")]
+        Commands::Serve {
+            port,
+            gateway_host,
+            gateway_port,
+            gateway_token,
+        } => {
+            cmd_serve(port, &gateway_host, gateway_port, &gateway_token);
         }
         Commands::Pause => {
             cmd_pause();
@@ -621,6 +650,72 @@ fn cmd_start(
     // Final stats
     println!();
     println!("{}", transparency_log.summary());
+}
+
+/// Start HTTP server for receiving behavioral data from Chrome extension
+#[cfg(feature = "server")]
+fn cmd_serve(port: u16, gateway_host: &str, gateway_port: u16, gateway_token: &str) {
+    use synheart_sensor_agent::server::ServerConfig;
+    use synheart_sensor_agent::gateway::GatewayConfig;
+
+    println!("Synheart Sensor Agent v{VERSION}");
+    println!();
+    println!("Starting HTTP server for Chrome extension...");
+    println!("  Listen port: {port}");
+    println!("  Gateway: {gateway_host}:{gateway_port}");
+    println!();
+
+    // Load config for state directory
+    let config = Config::load().unwrap_or_default();
+    if let Err(e) = config.ensure_directories() {
+        eprintln!("Warning: Could not create directories: {e}");
+    }
+
+    // Create server config
+    let gateway_config = GatewayConfig::new(gateway_host, gateway_port, gateway_token.to_string());
+    let server_config = ServerConfig::new(port, gateway_config, config.data_path.clone());
+
+    // Set up runtime
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc_handler(r);
+
+    rt.block_on(async {
+        // Initialize tracing
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+
+        match synheart_sensor_agent::server::run(server_config).await {
+            Ok((addr, shutdown_tx)) => {
+                println!("Server listening on http://{}", addr);
+                println!();
+                println!("Chrome extension should POST to: http://{}/ingest", addr);
+                println!();
+                println!("Press Ctrl+C to stop");
+                println!();
+
+                // Wait for Ctrl+C
+                while running.load(Ordering::SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+
+                println!();
+                println!("Shutting down server...");
+                let _ = shutdown_tx.send(());
+            }
+            Err(e) => {
+                eprintln!("Failed to start server: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
 }
 
 fn cmd_pause() {
