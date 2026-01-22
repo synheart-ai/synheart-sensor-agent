@@ -140,6 +140,7 @@ fn main() {
     }
 }
 
+#[allow(unused_variables)]
 fn cmd_start(
     sources: &str,
     _foreground: bool,
