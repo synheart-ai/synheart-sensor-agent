@@ -55,6 +55,9 @@ pub mod flux;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 
+#[cfg(feature = "server")]
+pub mod server;
+
 // Re-export key types at crate root for convenience
 pub use collector::{Collector, CollectorConfig, CollectorError, SensorEvent};
 pub use config::{Config, SourceConfig};
@@ -68,8 +71,12 @@ pub use flux::{EnrichedSnapshot, SensorFluxProcessor};
 // Gateway re-exports (when enabled)
 #[cfg(feature = "gateway")]
 pub use gateway::{
-    BlockingGatewayClient, GatewayClient, GatewayConfig, GatewayError, GatewayResponse, HsiState,
+    BlockingGatewayClient, GatewayClient, GatewayConfig, GatewayError, GatewayResponse,
 };
+
+// Server re-exports (when enabled)
+#[cfg(feature = "server")]
+pub use server::{run as run_server, ServerConfig};
 
 /// Library version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
