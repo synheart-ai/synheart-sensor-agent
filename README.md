@@ -1,6 +1,6 @@
 # Synheart Sensor Agent
 
-[![CI](https://github.com/synheart-ai/synheart-sensor-agent/.github/workflows/workflows/ci.yml/badge.svg)](https://github.com/synheart-ai/synheart-sensor-agent/.github/workflows/ci.yml)
+[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/synheart-ai/synheart-sensor-agent?sort=semver)](https://github.com/synheart-ai/synheart-sensor-agent/releases)
 [![Issues](https://img.shields.io/github/issues/synheart-ai/synheart-sensor-agent)](https://github.com/synheart-ai/synheart-sensor-agent/issues)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
