@@ -21,6 +21,33 @@ Synheart Sensor Agent collects behavioral timing data from keyboard and mouse in
 - **Transparency**: Full visibility into what data is collected via `status` command
 - **macOS Support**: Native integration using Core Graphics event taps
 
+## Core Gateway Integration
+
+For real-time HSI processing via [synheart-core-gateway](https://github.com/synheart-ai/synheart-core-gateway), enable the `gateway` feature:
+
+```bash
+# Build with gateway support
+cargo build --release --features gateway
+
+# Start with gateway sync (auto-detects port/token from runtime dir)
+./target/release/synheart-sensor start --gateway
+
+# Or specify port and token manually
+./target/release/synheart-sensor start --gateway --gateway-port 8080 --gateway-token your-token
+
+# Customize sync interval (default: 10 seconds)
+./target/release/synheart-sensor start --gateway --sync-interval 5
+```
+
+The gateway client reads configuration from:
+- Port: `~/Library/Application Support/SyniLife/runtime/gateway.port`
+- Token: `~/Library/Application Support/SyniLife/runtime/gateway.token`
+
+When connected, you'll see HSI state updates:
+```
+[Gateway] Synced 3 snapshots | HSI: focus: high, load: moderate, recovery: good
+```
+
 ## Synheart Flux Integration (Optional)
 
 For rolling baselines and enriched HSI metrics, enable the optional `flux` feature and runtime flag:
@@ -31,6 +58,15 @@ cargo build --release --features flux
 ```
 
 Full guide: [`SYNHEART_FLUX_INTEGRATION.md`](SYNHEART_FLUX_INTEGRATION.md)
+
+## Combined Features
+
+Enable both gateway sync and local flux processing:
+
+```bash
+cargo build --release --features "gateway,flux"
+./target/release/synheart-sensor start --gateway --flux
+```
 
 ## Privacy Guarantees
 
@@ -249,20 +285,29 @@ Default configuration:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Synheart Sensor Agent                     │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐       │
-│  │  Collector  │──▶│  Windowing  │──▶│  Features   │       │
-│  │   (macOS)   │   │  (10s bins) │   │ (compute)   │       │
-│  └─────────────┘   └─────────────┘   └─────────────┘       │
-│         │                                    │              │
-│         ▼                                    ▼              │
-│  ┌─────────────┐                     ┌─────────────┐       │
-│  │Transparency │                     │    HSI      │       │
-│  │    Log      │                     │  Snapshot   │       │
-│  └─────────────┘                     └─────────────┘       │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Synheart Sensor Agent                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                    │
+│  │  Collector  │──▶│  Windowing  │──▶│  Features   │                    │
+│  │   (macOS)   │   │  (10s bins) │   │ (compute)   │                    │
+│  └─────────────┘   └─────────────┘   └─────────────┘                    │
+│         │                                    │                           │
+│         ▼                                    ▼                           │
+│  ┌─────────────┐                     ┌─────────────┐   ┌─────────────┐  │
+│  │Transparency │                     │    HSI      │──▶│   Gateway   │  │
+│  │    Log      │                     │  Snapshot   │   │   Client    │  │
+│  └─────────────┘                     └─────────────┘   └──────┬──────┘  │
+└───────────────────────────────────────────────────────────────┼─────────┘
+                                                                 │
+                                                                 ▼
+                                                    ┌─────────────────────┐
+                                                    │  Core Gateway       │
+                                                    │  /v1/ingest/behavioral
+                                                    │  ─────────────────  │
+                                                    │  HSI Processing     │
+                                                    │  via synheart-flux  │
+                                                    └─────────────────────┘
 ```
 
 ## Development
@@ -298,6 +343,8 @@ synheart-sensor-agent/
 │   ├── main.rs             # CLI entry point
 │   ├── lib.rs              # Library exports
 │   ├── config.rs           # Configuration management
+│   ├── gateway.rs          # Gateway client (optional, --features gateway)
+│   ├── flux.rs             # Flux integration (optional, --features flux)
 │   ├── core/
 │   │   ├── mod.rs          # Core module
 │   │   ├── windowing.rs    # Window management

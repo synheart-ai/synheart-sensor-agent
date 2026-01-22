@@ -17,6 +17,9 @@ use synheart_sensor_agent::{
     PRIVACY_DECLARATION, VERSION,
 };
 
+#[cfg(feature = "gateway")]
+use synheart_sensor_agent::{BlockingGatewayClient, GatewayConfig};
+
 #[derive(Parser)]
 #[command(name = "synheart-sensor")]
 #[command(author = "Synheart")]
@@ -46,6 +49,22 @@ enum Commands {
         /// Baseline window size (number of sessions for rolling baseline)
         #[arg(long, default_value = "20")]
         baseline_window: usize,
+
+        /// Enable gateway sync (requires gateway feature)
+        #[arg(long)]
+        gateway: bool,
+
+        /// Gateway port (auto-detected from runtime dir if not specified)
+        #[arg(long)]
+        gateway_port: Option<u16>,
+
+        /// Gateway token (auto-detected from runtime dir if not specified)
+        #[arg(long)]
+        gateway_token: Option<String>,
+
+        /// Sync interval in seconds (how often to sync to gateway)
+        #[arg(long, default_value = "10")]
+        sync_interval: u64,
     },
 
     /// Pause data collection
@@ -84,8 +103,21 @@ fn main() {
             foreground,
             flux,
             baseline_window,
+            gateway,
+            gateway_port,
+            gateway_token,
+            sync_interval,
         } => {
-            cmd_start(&sources, foreground, flux, baseline_window);
+            cmd_start(
+                &sources,
+                foreground,
+                flux,
+                baseline_window,
+                gateway,
+                gateway_port,
+                gateway_token,
+                sync_interval,
+            );
         }
         Commands::Pause => {
             cmd_pause();
@@ -108,7 +140,16 @@ fn main() {
     }
 }
 
-fn cmd_start(sources: &str, _foreground: bool, enable_flux: bool, baseline_window: usize) {
+fn cmd_start(
+    sources: &str,
+    _foreground: bool,
+    enable_flux: bool,
+    baseline_window: usize,
+    enable_gateway: bool,
+    gateway_port: Option<u16>,
+    gateway_token: Option<String>,
+    sync_interval: u64,
+) {
     println!("Synheart Sensor Agent v{VERSION}");
     println!();
 
@@ -166,6 +207,42 @@ fn cmd_start(sources: &str, _foreground: bool, enable_flux: bool, baseline_windo
     #[cfg(not(feature = "flux"))]
     if enable_flux {
         eprintln!("Warning: --flux flag ignored (flux feature not enabled at compile time)");
+    }
+
+    // Show gateway status
+    #[cfg(feature = "gateway")]
+    let gateway_client = if enable_gateway {
+        match create_gateway_client(gateway_port, gateway_token) {
+            Ok(client) => {
+                println!("  Gateway sync: enabled (interval: {}s)", sync_interval);
+                println!("  Device ID: {}", client.device_id());
+
+                // Test connection
+                match client.test_connection() {
+                    Ok(true) => println!("  Gateway connection: OK"),
+                    Ok(false) => {
+                        eprintln!("Warning: Gateway health check failed");
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Could not connect to gateway: {e}");
+                    }
+                }
+                Some(client)
+            }
+            Err(e) => {
+                eprintln!("Warning: Gateway initialization failed: {e}");
+                eprintln!("Continuing without gateway sync.");
+                None
+            }
+        }
+    } else {
+        println!("  Gateway sync: disabled");
+        None
+    };
+
+    #[cfg(not(feature = "gateway"))]
+    if enable_gateway {
+        eprintln!("Warning: --gateway flag ignored (gateway feature not enabled at compile time)");
     }
 
     println!();
@@ -239,6 +316,14 @@ fn cmd_start(sources: &str, _foreground: bool, enable_flux: bool, baseline_windo
         eprintln!("Error starting collector: {e}");
         std::process::exit(1);
     }
+
+    // Gateway sync state
+    #[cfg(feature = "gateway")]
+    let mut pending_sync_snapshots: Vec<HsiSnapshot> = Vec::new();
+    #[cfg(feature = "gateway")]
+    let mut last_gateway_sync = std::time::Instant::now();
+    #[cfg(feature = "gateway")]
+    let session_id = format!("SESS-{}", Utc::now().timestamp_millis());
 
     // Main event loop
     let receiver = collector.receiver().clone();
@@ -373,7 +458,64 @@ fn cmd_start(sources: &str, _foreground: bool, enable_flux: bool, baseline_windo
                 window.mouse_events.len()
             );
 
-            snapshots.push(snapshot);
+            snapshots.push(snapshot.clone());
+
+            // Add to gateway sync buffer
+            #[cfg(feature = "gateway")]
+            if gateway_client.is_some() {
+                pending_sync_snapshots.push(snapshot);
+            }
+        }
+
+        // Sync to gateway if enabled and interval has passed
+        #[cfg(feature = "gateway")]
+        if let Some(ref client) = gateway_client {
+            if last_gateway_sync.elapsed() >= Duration::from_secs(sync_interval)
+                && !pending_sync_snapshots.is_empty()
+            {
+                match client.sync_snapshots(&pending_sync_snapshots, &session_id) {
+                    Ok(response) => {
+                        if let Some(state) = response.state {
+                            println!(
+                                "[Gateway] Synced {} snapshots | HSI: {}",
+                                pending_sync_snapshots.len(),
+                                state
+                            );
+                        } else {
+                            println!(
+                                "[Gateway] Synced {} snapshots",
+                                pending_sync_snapshots.len()
+                            );
+                        }
+                        pending_sync_snapshots.clear();
+                    }
+                    Err(e) => {
+                        eprintln!("[Gateway] Sync failed: {e}");
+                        // Keep snapshots for retry
+                    }
+                }
+                last_gateway_sync = std::time::Instant::now();
+            }
+        }
+    }
+
+    // Final gateway sync before exit
+    #[cfg(feature = "gateway")]
+    if let Some(ref client) = gateway_client {
+        if !pending_sync_snapshots.is_empty() {
+            println!("Syncing remaining {} snapshots to gateway...", pending_sync_snapshots.len());
+            match client.sync_snapshots(&pending_sync_snapshots, &session_id) {
+                Ok(response) => {
+                    if let Some(state) = response.state {
+                        println!("[Gateway] Final sync complete | HSI: {}", state);
+                    } else {
+                        println!("[Gateway] Final sync complete");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[Gateway] Final sync failed: {e}");
+                }
+            }
         }
     }
 
@@ -660,4 +802,29 @@ fn ctrlc_handler(running: Arc<AtomicBool>) {
         running.store(false, Ordering::SeqCst);
     })
     .expect("Error setting Ctrl+C handler");
+}
+
+/// Create gateway client from CLI args or runtime directory.
+#[cfg(feature = "gateway")]
+fn create_gateway_client(
+    port: Option<u16>,
+    token: Option<String>,
+) -> Result<BlockingGatewayClient, synheart_sensor_agent::GatewayError> {
+    // If both port and token are provided, use them directly
+    if let (Some(p), Some(t)) = (port, token.clone()) {
+        let config = GatewayConfig::new("127.0.0.1", p, t);
+        return BlockingGatewayClient::new(config);
+    }
+
+    // Try to load from runtime directory
+    match BlockingGatewayClient::from_runtime() {
+        Ok(client) => Ok(client),
+        Err(e) => {
+            // If partial args provided, try to fill in the gaps
+            if port.is_some() || token.is_some() {
+                eprintln!("Warning: Partial gateway config provided, trying runtime directory...");
+            }
+            Err(e)
+        }
+    }
 }
