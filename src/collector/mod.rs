@@ -8,6 +8,9 @@ pub mod types;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(not(target_os = "macos"))]
+pub mod noop;
+
 // Re-export commonly used types
 pub use types::{
     KeyboardEvent, MouseEvent, MouseEventType, ScrollDirection, ScrollMagnitude, SensorEvent,
@@ -19,3 +22,10 @@ pub use macos::{check_permission, CollectorConfig, CollectorError, MacOSCollecto
 /// Platform-agnostic collector type alias
 #[cfg(target_os = "macos")]
 pub type Collector = MacOSCollector;
+
+#[cfg(not(target_os = "macos"))]
+pub use noop::{check_permission, CollectorConfig, CollectorError, NoopCollector};
+
+/// Platform-agnostic collector type alias
+#[cfg(not(target_os = "macos"))]
+pub type Collector = NoopCollector;
