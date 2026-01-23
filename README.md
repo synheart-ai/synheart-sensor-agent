@@ -17,7 +17,7 @@ Synheart Sensor Agent collects behavioral timing data from keyboard and mouse in
 
 - **Privacy by Design**: Never captures key content, passwords, or screen coordinates
 - **Behavioral Features**: Extracts 16+ behavioral signals from interaction patterns
-- **HSI Format**: Exports data in the Human Sensor Interface (HSI) JSON format
+- **HSI Format**: Exports data in the Human State Interface (HSI) JSON format ( via Synheart Flux )
 - **Transparency**: Full visibility into what data is collected via `status` command
 - **macOS Support**: Native integration using Core Graphics event taps
 
