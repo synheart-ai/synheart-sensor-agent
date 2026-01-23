@@ -18,10 +18,6 @@ gateway = ["reqwest"]
 server = ["axum", "tower-http", "flux", "gateway", "tracing", "tracing-subscriber", "anyhow"]
 
 [dependencies]
-# macOS event capture
-core-graphics = "0.25"
-core-foundation = "0.10"
-
 # Synheart Flux for baseline tracking and HSI enrichment (optional)
 
 synheart-flux = { git = "https://github.com/synheart-ai/synheart-flux", optional = true }
@@ -72,3 +68,8 @@ ctrlc = "3.4"
 [[example]]
 name = "capture_demo"
 path = "examples/capture_demo.rs"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS event capture (CoreGraphics event tap)
+core-graphics = "0.25"
+core-foundation = "0.10"
