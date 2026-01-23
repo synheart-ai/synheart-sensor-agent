@@ -91,9 +91,9 @@ impl GatewayConfig {
         format!("http://{}:{}", self.host, self.port)
     }
 
-    /// Get the behavioral ingest endpoint URL.
+    /// Get the ingest endpoint URL (pure relay).
     pub fn ingest_url(&self) -> String {
-        format!("{}/v1/ingest/behavioral", self.url())
+        format!("{}/v1/ingest", self.url())
     }
 
     /// Get the health check endpoint URL.
@@ -383,10 +383,7 @@ mod tests {
     fn test_gateway_config_url() {
         let config = GatewayConfig::new("127.0.0.1", 8080, "test-token");
         assert_eq!(config.url(), "http://127.0.0.1:8080");
-        assert_eq!(
-            config.ingest_url(),
-            "http://127.0.0.1:8080/v1/ingest/behavioral"
-        );
+        assert_eq!(config.ingest_url(), "http://127.0.0.1:8080/v1/ingest");
         assert_eq!(config.health_url(), "http://127.0.0.1:8080/health");
     }
 

@@ -15,7 +15,6 @@
 
 use crate::core::HsiSnapshot;
 use crate::gateway::GatewayConfig;
-use crate::gateway::{BehavioralSession as GatewayBehavioralSession, SessionMeta, SessionPayload};
 use axum::{
     extract::State,
     http::{HeaderValue, StatusCode},
@@ -191,39 +190,12 @@ async fn ingest(
         )
     })?;
 
-    // Extract session fields from the inbound payload for gateway session envelope.
-    // (If the Chrome extension omits fields, fall back to safe defaults.)
-    let session_obj = data.session.as_object();
-    let get_str = |key: &str| -> Option<String> {
-        session_obj
-            .and_then(|m| m.get(key))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    };
-
-    let session_id = get_str("session_id").unwrap_or_else(|| "unknown-session".to_string());
-    let device_id = get_str("device_id").unwrap_or_else(|| "unknown-device".to_string());
-    let timezone = get_str("timezone").unwrap_or_else(|| "UTC".to_string());
-    let start_time = get_str("start_time").unwrap_or_else(|| hsi_snapshot.observed_at_utc.clone());
-    let end_time = get_str("end_time").unwrap_or_else(|| hsi_snapshot.computed_at_utc.clone());
-
-    // Forward to core-gateway behavioral ingest endpoint.
+    // Forward to core-gateway relay endpoint with simple { source, payload } format
     let gateway_url = state.gateway_config.ingest_url();
-    let gateway_payload = GatewayBehavioralSession {
-        session: SessionPayload {
-            session_id,
-            device_id,
-            timezone,
-            start_time,
-            end_time,
-            snapshots: vec![hsi_snapshot.clone()],
-            meta: SessionMeta {
-                source: "synheart-sensor-agent-server".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                snapshot_count: 1,
-            },
-        },
-    };
+    let gateway_payload = serde_json::json!({
+        "source": "sensor-agent",
+        "payload": hsi_snapshot
+    });
 
     let response = state
         .http_client
