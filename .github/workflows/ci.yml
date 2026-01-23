@@ -122,8 +122,8 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@v6
         with:
-          name: synheart-sensor-agent-macos
-          path: target/release/synheart-sensor-agent
+          name: synheart-sensor-macos
+          path: target/release/synheart-sensor
 
   docs:
     name: Documentation
