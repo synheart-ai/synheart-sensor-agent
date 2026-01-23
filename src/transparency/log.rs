@@ -134,7 +134,8 @@ impl TransparencyLog {
                 last_updated: Utc::now(),
             };
 
-            let json = serde_json::to_string_pretty(&persisted).map_err(std::io::Error::other)?;
+            let json = serde_json::to_string_pretty(&persisted)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
             std::fs::write(path, json)?;
         }
@@ -146,8 +147,8 @@ impl TransparencyLog {
         if let Some(ref path) = self.persist_path {
             if path.exists() {
                 let content = std::fs::read_to_string(path)?;
-                let persisted: PersistedStats =
-                    serde_json::from_str(&content).map_err(std::io::Error::other)?;
+                let persisted: PersistedStats = serde_json::from_str(&content)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
                 self.keyboard_events
                     .store(persisted.keyboard_events, Ordering::Relaxed);
