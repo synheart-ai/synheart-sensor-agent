@@ -6,17 +6,18 @@
 
 use crate::collector::types::{KeyboardEvent, MouseEvent, SensorEvent};
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::ptr::null_mut;
+// use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::Threading::GetCurrentThreadId;
+// use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
-    MSLLHOOKSTRUCT, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    CallNextHookEx, PeekMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
+    MSLLHOOKSTRUCT, PM_REMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// Configuration for which event sources to capture.
@@ -303,21 +304,21 @@ fn run_hook_loop(
         // Message loop
         let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
         while running.load(Ordering::SeqCst) {
-            // Process messages with a timeout so we can check the running flag
-            let result = GetMessageW(&mut msg, HWND::default(), 0, 0);
+            // Use PeekMessageW instead of GetMessageW to avoid blocking indefinitely
+            // This allows us to check the running flag periodically
+            let result = PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE);
 
-            if result.0 > 0 {
-                // Message retrieved, but we don't need to dispatch it
-                // The hooks run automatically
-            } else if result.0 == 0 {
-                // WM_QUIT received
-                break;
+            if result.as_bool() {
+                // Message retrieved
+                if msg.message == WM_QUIT {
+                    break;
+                }
+                // The hooks run automatically, no need to dispatch
             } else {
-                // Error occurred
-                break;
+                // No message available, sleep briefly to avoid busy-waiting
+                // and allow the running flag check to happen periodically
+                std::thread::sleep(Duration::from_millis(10));
             }
-
-            // Check running status periodically (we already do this in the loop condition)
         }
 
         // Unhook before exiting
