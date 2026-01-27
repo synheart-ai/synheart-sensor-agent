@@ -3,14 +3,19 @@
 //! This module extracts behavioral features from time windows of events.
 //! All features are computed from timing and magnitude data only - never content.
 
-use crate::collector::types::{KeyboardEvent, MouseEvent, MouseEventType};
+use crate::collector::types::{KeyboardEvent, KeyboardEventType, MouseEvent, MouseEventType};
 use crate::core::windowing::EventWindow;
 use serde::{Deserialize, Serialize};
 
 /// Keyboard-derived behavioral features.
+///
+/// Note: Typing metrics (typing_rate, typing_tap_count, etc.) are computed from
+/// typing keys ONLY. Navigation keys (arrows, page up/down, home/end) are tracked
+/// separately via keyboard_scroll_rate to avoid inflating typing metrics during
+/// navigation-heavy text editing sessions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KeyboardFeatures {
-    /// Keys per second
+    /// Typing keys per second (excludes navigation keys)
     pub typing_rate: f64,
     /// Number of idle gaps (pauses) per window
     pub pause_count: u32,
@@ -24,6 +29,19 @@ pub struct KeyboardFeatures {
     pub burst_index: f64,
     /// Ratio of active typing time to total window time
     pub session_continuity: f64,
+    /// Total number of discrete typing tap events (excludes navigation keys)
+    pub typing_tap_count: u32,
+    /// Normalized rhythmic consistency score (0-1, higher = more regular timing)
+    pub typing_cadence_stability: f64,
+    /// Proportion of inter-tap intervals classified as gaps
+    pub typing_gap_ratio: f64,
+    /// Composite metric combining speed, cadence stability, and gap behavior (0-1)
+    pub typing_interaction_intensity: f64,
+    /// Navigation key events per second (arrow keys, page up/down, home/end)
+    /// Tracked separately from typing to distinguish keyboard scrolling from mouse scrolling
+    pub keyboard_scroll_rate: f64,
+    /// Total navigation key events in the window
+    pub navigation_key_count: u32,
 }
 
 /// Mouse-derived behavioral features.
@@ -45,9 +63,16 @@ pub struct MouseFeatures {
     pub idle_ratio: f64,
     /// Ratio of small movements to total movements
     pub micro_adjustment_ratio: f64,
+    /// Total idle time in milliseconds (periods with no mouse activity > 1 second)
+    pub idle_time_ms: u64,
 }
 
 /// Derived behavioral signals combining keyboard and mouse data.
+///
+/// Metric Provenance:
+/// - These signals are computed locally in the sensor agent
+/// - Additional enriched signals (distraction_score, focus_hint) are computed in Flux
+/// - Task switch metrics are NOT captured (requires app context, violates privacy policy)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BehavioralSignals {
     /// Overall interaction rhythm (regularity of input)
@@ -58,6 +83,14 @@ pub struct BehavioralSignals {
     pub motor_stability: f64,
     /// Proxy for focus/attention continuity
     pub focus_continuity_proxy: f64,
+    /// General burstiness of interactions (0-1, higher = more clustered activity)
+    /// Combines keyboard burst_index and mouse activity patterns
+    pub burstiness: f64,
+    /// True if this window represents a deep focus block:
+    /// - Continuous interaction with no idle gaps > 2 seconds
+    /// - High session continuity (> 0.7)
+    /// - Consistent activity throughout the window
+    pub deep_focus_block: bool,
 }
 
 /// All computed features for a window.
@@ -91,20 +124,48 @@ pub fn compute_features(window: &EventWindow) -> WindowFeatures {
 }
 
 /// Compute keyboard features from a list of keyboard events.
+///
+/// Typing metrics are computed from typing key events ONLY (excludes navigation keys).
+/// Navigation keys (arrows, page up/down, home/end) are tracked separately via
+/// keyboard_scroll_rate to distinguish keyboard scrolling from mouse scrolling.
 fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> KeyboardFeatures {
     if events.is_empty() || window_duration <= 0.0 {
         return KeyboardFeatures::default();
     }
 
-    // Count key presses (key down events)
-    let key_presses: Vec<&KeyboardEvent> = events.iter().filter(|e| e.is_key_down).collect();
-    let key_press_count = key_presses.len();
+    // Separate typing events from navigation events
+    let typing_events: Vec<&KeyboardEvent> = events
+        .iter()
+        .filter(|e| e.event_type == KeyboardEventType::TypingTap)
+        .collect();
 
-    // Typing rate
-    let typing_rate = key_press_count as f64 / window_duration;
+    let navigation_events: Vec<&KeyboardEvent> = events
+        .iter()
+        .filter(|e| e.event_type == KeyboardEventType::NavigationKey)
+        .collect();
 
-    // Compute inter-key intervals for key presses
-    let intervals: Vec<i64> = key_presses
+    // Count navigation key presses (key down events only)
+    let navigation_key_presses: Vec<&KeyboardEvent> = navigation_events
+        .iter()
+        .filter(|e| e.is_key_down)
+        .copied()
+        .collect();
+    let navigation_key_count = navigation_key_presses.len() as u32;
+    let keyboard_scroll_rate = navigation_key_count as f64 / window_duration;
+
+    // Count typing key presses (key down events only) - EXCLUDES navigation keys
+    let typing_key_presses: Vec<&KeyboardEvent> = typing_events
+        .iter()
+        .filter(|e| e.is_key_down)
+        .copied()
+        .collect();
+    let typing_tap_count = typing_key_presses.len() as u32;
+
+    // Typing rate (typing keys only)
+    let typing_rate = typing_tap_count as f64 / window_duration;
+
+    // Compute inter-key intervals for typing key presses only
+    let intervals: Vec<i64> = typing_key_presses
         .windows(2)
         .map(|pair| (pair[1].timestamp - pair[0].timestamp).num_milliseconds())
         .collect();
@@ -126,8 +187,8 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
     let latency_variability = std_dev(&intervals.iter().map(|&i| i as f64).collect::<Vec<_>>());
 
     // Hold time computation (requires matching key down/up pairs)
-    // For simplicity, we estimate from consecutive down/up events
-    let hold_times = compute_hold_times(events);
+    // Only compute from typing events to avoid navigation key hold times
+    let hold_times = compute_hold_times(&typing_events);
     let hold_time_mean = if hold_times.is_empty() {
         0.0
     } else {
@@ -153,6 +214,24 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
     let active_time_ms: i64 = active_intervals.iter().sum();
     let session_continuity = (active_time_ms as f64 / 1000.0) / window_duration;
 
+    // Typing cadence stability: normalized rhythmic consistency (0-1, higher = more regular)
+    // Inverse relationship with latency variability
+    let typing_cadence_stability = 1.0 / (1.0 + latency_variability / 100.0);
+
+    // Typing gap ratio: proportion of inter-tap intervals classified as gaps
+    let typing_gap_ratio = if intervals.is_empty() {
+        0.0
+    } else {
+        pause_count as f64 / intervals.len() as f64
+    };
+
+    // Typing interaction intensity: composite metric (0-1)
+    // Combines normalized speed, cadence stability, and inverse gap ratio
+    let normalized_speed = (typing_rate / 10.0).min(1.0); // Normalize to ~10 keys/sec max
+    let typing_interaction_intensity =
+        (normalized_speed * 0.4 + typing_cadence_stability * 0.3 + (1.0 - typing_gap_ratio) * 0.3)
+            .clamp(0.0, 1.0);
+
     KeyboardFeatures {
         typing_rate,
         pause_count,
@@ -161,11 +240,17 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
         hold_time_mean,
         burst_index,
         session_continuity: session_continuity.min(1.0), // Cap at 1.0
+        typing_tap_count,
+        typing_cadence_stability,
+        typing_gap_ratio,
+        typing_interaction_intensity,
+        keyboard_scroll_rate,
+        navigation_key_count,
     }
 }
 
 /// Estimate hold times from event sequence.
-fn compute_hold_times(events: &[KeyboardEvent]) -> Vec<f64> {
+fn compute_hold_times(events: &[&KeyboardEvent]) -> Vec<f64> {
     let mut hold_times = Vec::new();
     let mut last_down: Option<&KeyboardEvent> = None;
 
@@ -236,8 +321,9 @@ fn compute_mouse_features(events: &[MouseEvent], window_duration: f64) -> MouseF
     let click_rate = click_events.len() as f64 / window_duration;
     let scroll_rate = scroll_events.len() as f64 / window_duration;
 
-    // Idle ratio: estimate based on gaps in movement events
-    let idle_ratio = estimate_idle_ratio(&move_events, window_duration);
+    // Idle metrics: estimate based on gaps in movement events
+    let (idle_ratio, idle_time_ms, _has_long_gap) =
+        estimate_idle_metrics(&move_events, window_duration);
 
     // Micro-adjustment ratio: small movements vs all movements
     let micro_count = velocities
@@ -259,28 +345,42 @@ fn compute_mouse_features(events: &[MouseEvent], window_duration: f64) -> MouseF
         scroll_rate,
         idle_ratio,
         micro_adjustment_ratio,
+        idle_time_ms,
     }
 }
 
-/// Estimate idle ratio from movement event gaps.
-fn estimate_idle_ratio(move_events: &[&MouseEvent], window_duration: f64) -> f64 {
+/// Estimate idle metrics from movement event gaps.
+/// Returns (idle_ratio, idle_time_ms, has_long_gap).
+/// has_long_gap is true if any gap exceeds 2 seconds (used for deep focus detection).
+fn estimate_idle_metrics(move_events: &[&MouseEvent], window_duration: f64) -> (f64, u64, bool) {
     if move_events.len() < 2 {
-        return 1.0; // No movement = all idle
+        // No movement = all idle
+        let total_idle = (window_duration * 1000.0) as u64;
+        return (1.0, total_idle, true);
     }
 
     // Consider gaps > 1 second as "idle"
     const IDLE_THRESHOLD_MS: i64 = 1000;
+    // Consider gaps > 2 seconds as "long gaps" (breaks deep focus)
+    const LONG_GAP_THRESHOLD_MS: i64 = 2000;
 
     let mut idle_time_ms: i64 = 0;
+    let mut has_long_gap = false;
+
     for pair in move_events.windows(2) {
         let gap = (pair[1].timestamp - pair[0].timestamp).num_milliseconds();
         if gap > IDLE_THRESHOLD_MS {
             idle_time_ms += gap - IDLE_THRESHOLD_MS; // Count only the excess as idle
         }
+        if gap > LONG_GAP_THRESHOLD_MS {
+            has_long_gap = true;
+        }
     }
 
     let idle_secs = idle_time_ms as f64 / 1000.0;
-    (idle_secs / window_duration).min(1.0)
+    let idle_ratio = (idle_secs / window_duration).min(1.0);
+
+    (idle_ratio, idle_time_ms.max(0) as u64, has_long_gap)
 }
 
 /// Compute derived behavioral signals from keyboard and mouse features.
@@ -310,11 +410,35 @@ fn compute_behavioral_signals(
     // High session continuity, low idle ratio
     let focus_continuity_proxy = keyboard.session_continuity * 0.5 + (1.0 - mouse.idle_ratio) * 0.5;
 
+    // Burstiness: general measure of whether interactions occur in clusters or evenly
+    // Combines keyboard burst_index with mouse activity patterns
+    // High burstiness = interactions come in bursts with gaps between
+    let keyboard_burstiness = keyboard.burst_index;
+    // Mouse burstiness: high activity rate with high idle ratio indicates bursty behavior
+    let mouse_burstiness = if mouse.mouse_activity_rate > 0.0 {
+        // If there's activity but also significant idle time, it's bursty
+        mouse.idle_ratio * (1.0 - mouse.micro_adjustment_ratio)
+    } else {
+        0.0
+    };
+    let burstiness = (keyboard_burstiness * 0.6 + mouse_burstiness * 0.4).clamp(0.0, 1.0);
+
+    // Deep focus block detection:
+    // - High session continuity (> 0.7) - sustained typing activity
+    // - Low idle ratio (< 0.3) - minimal gaps in mouse activity
+    // - Some minimum activity (typing or mouse) to confirm engagement
+    let has_activity = keyboard.typing_tap_count > 0 || mouse.mouse_activity_rate > 0.5;
+    let sustained_typing = keyboard.session_continuity > 0.7;
+    let minimal_idle = mouse.idle_ratio < 0.3;
+    let deep_focus_block = has_activity && sustained_typing && minimal_idle;
+
     BehavioralSignals {
         interaction_rhythm: interaction_rhythm.clamp(0.0, 1.0),
         friction: friction.clamp(0.0, 1.0),
         motor_stability: motor_stability.clamp(0.0, 1.0),
         focus_continuity_proxy: focus_continuity_proxy.clamp(0.0, 1.0),
+        burstiness,
+        deep_focus_block,
     }
 }
 
@@ -338,6 +462,15 @@ mod tests {
         KeyboardEvent {
             timestamp: Utc::now() + Duration::milliseconds(offset_ms),
             is_key_down: is_down,
+            event_type: KeyboardEventType::TypingTap,
+        }
+    }
+
+    fn make_navigation_event(is_down: bool, offset_ms: i64) -> KeyboardEvent {
+        KeyboardEvent {
+            timestamp: Utc::now() + Duration::milliseconds(offset_ms),
+            is_key_down: is_down,
+            event_type: KeyboardEventType::NavigationKey,
         }
     }
 
@@ -380,5 +513,304 @@ mod tests {
         assert!(signals.friction >= 0.0 && signals.friction <= 1.0);
         assert!(signals.motor_stability >= 0.0 && signals.motor_stability <= 1.0);
         assert!(signals.focus_continuity_proxy >= 0.0 && signals.focus_continuity_proxy <= 1.0);
+    }
+
+    #[test]
+    fn test_typing_tap_count() {
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 200),
+            make_keyboard_event(false, 250),
+        ];
+
+        let features = compute_keyboard_features(&events, 1.0);
+        assert_eq!(features.typing_tap_count, 3); // 3 key presses
+    }
+
+    #[test]
+    fn test_typing_cadence_stability_bounds() {
+        // Empty events should give default (which uses 0 variability)
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert!(
+            features_empty.typing_cadence_stability >= 0.0
+                && features_empty.typing_cadence_stability <= 1.0
+        );
+
+        // Regular typing should have high cadence stability
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 200),
+            make_keyboard_event(false, 250),
+        ];
+        let features = compute_keyboard_features(&events, 1.0);
+        assert!(
+            features.typing_cadence_stability >= 0.0 && features.typing_cadence_stability <= 1.0
+        );
+        // Regular intervals should yield high stability
+        assert!(features.typing_cadence_stability > 0.5);
+    }
+
+    #[test]
+    fn test_typing_gap_ratio_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert_eq!(features_empty.typing_gap_ratio, 0.0);
+
+        // Fast typing with no pauses
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+        ];
+        let features = compute_keyboard_features(&events, 1.0);
+        assert!(features.typing_gap_ratio >= 0.0 && features.typing_gap_ratio <= 1.0);
+        assert_eq!(features.typing_gap_ratio, 0.0); // No gaps in fast typing
+
+        // Typing with pauses (>500ms gaps)
+        let events_with_gaps = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 600), // 600ms gap = pause
+            make_keyboard_event(false, 650),
+        ];
+        let features_gaps = compute_keyboard_features(&events_with_gaps, 1.0);
+        assert!(features_gaps.typing_gap_ratio > 0.0); // Should have gaps
+    }
+
+    #[test]
+    fn test_typing_interaction_intensity_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert!(
+            features_empty.typing_interaction_intensity >= 0.0
+                && features_empty.typing_interaction_intensity <= 1.0
+        );
+
+        // High intensity: fast, regular, no gaps
+        let fast_events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 30),
+            make_keyboard_event(true, 60),
+            make_keyboard_event(false, 90),
+            make_keyboard_event(true, 120),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 180),
+            make_keyboard_event(false, 210),
+            make_keyboard_event(true, 240),
+            make_keyboard_event(false, 270),
+        ];
+        let features = compute_keyboard_features(&fast_events, 1.0);
+        assert!(
+            features.typing_interaction_intensity >= 0.0
+                && features.typing_interaction_intensity <= 1.0
+        );
+        // Fast regular typing should have moderate to high intensity
+        assert!(features.typing_interaction_intensity > 0.3);
+    }
+
+    #[test]
+    fn test_navigation_key_separation() {
+        // Mix of typing and navigation events
+        let events = vec![
+            make_keyboard_event(true, 0),      // typing
+            make_keyboard_event(false, 50),    // typing
+            make_navigation_event(true, 100),  // navigation (arrow key)
+            make_navigation_event(false, 150), // navigation
+            make_keyboard_event(true, 200),    // typing
+            make_keyboard_event(false, 250),   // typing
+            make_navigation_event(true, 300),  // navigation
+            make_navigation_event(false, 350), // navigation
+        ];
+
+        let features = compute_keyboard_features(&events, 1.0);
+
+        // Should only count typing key presses (2 typing events)
+        assert_eq!(features.typing_tap_count, 2);
+        assert_eq!(features.typing_rate, 2.0);
+
+        // Should count navigation key presses separately (2 navigation events)
+        assert_eq!(features.navigation_key_count, 2);
+        assert_eq!(features.keyboard_scroll_rate, 2.0);
+    }
+
+    #[test]
+    fn test_navigation_keys_dont_inflate_typing_metrics() {
+        // Only navigation events - typing metrics should be zero/default
+        let nav_only_events = vec![
+            make_navigation_event(true, 0),
+            make_navigation_event(false, 50),
+            make_navigation_event(true, 100),
+            make_navigation_event(false, 150),
+            make_navigation_event(true, 200),
+            make_navigation_event(false, 250),
+        ];
+
+        let features = compute_keyboard_features(&nav_only_events, 1.0);
+
+        // Typing metrics should be zero
+        assert_eq!(features.typing_tap_count, 0);
+        assert_eq!(features.typing_rate, 0.0);
+
+        // Navigation metrics should be counted
+        assert_eq!(features.navigation_key_count, 3);
+        assert_eq!(features.keyboard_scroll_rate, 3.0);
+    }
+
+    #[test]
+    fn test_keyboard_scroll_rate_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert_eq!(features_empty.keyboard_scroll_rate, 0.0);
+        assert_eq!(features_empty.navigation_key_count, 0);
+
+        // Navigation-heavy session
+        let nav_events = vec![
+            make_navigation_event(true, 0),
+            make_navigation_event(false, 30),
+            make_navigation_event(true, 60),
+            make_navigation_event(false, 90),
+            make_navigation_event(true, 120),
+            make_navigation_event(false, 150),
+        ];
+        let features = compute_keyboard_features(&nav_events, 1.0);
+        assert_eq!(features.navigation_key_count, 3);
+        assert!(features.keyboard_scroll_rate > 0.0);
+    }
+
+    #[test]
+    fn test_burstiness_bounds() {
+        let keyboard = KeyboardFeatures::default();
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // Burstiness should be between 0 and 1
+        assert!(signals.burstiness >= 0.0 && signals.burstiness <= 1.0);
+    }
+
+    #[test]
+    fn test_burstiness_high_burst_index() {
+        // High keyboard burst_index should increase burstiness
+        let keyboard = KeyboardFeatures {
+            burst_index: 0.9, // Very bursty typing
+            ..Default::default()
+        };
+
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // Should have elevated burstiness
+        assert!(signals.burstiness > 0.4);
+        assert!(signals.burstiness <= 1.0);
+    }
+
+    #[test]
+    fn test_deep_focus_block_detection() {
+        // Default (empty) features should NOT be deep focus
+        let keyboard = KeyboardFeatures::default();
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+        assert!(!signals.deep_focus_block);
+
+        // High continuity, low idle, some activity = deep focus
+        let keyboard_active = KeyboardFeatures {
+            session_continuity: 0.9, // High continuity
+            typing_tap_count: 50,    // Some activity
+            ..Default::default()
+        };
+
+        let mouse_active = MouseFeatures {
+            idle_ratio: 0.1, // Low idle ratio
+            mouse_activity_rate: 2.0,
+            ..Default::default()
+        };
+
+        let signals_active = compute_behavioral_signals(&keyboard_active, &mouse_active);
+        assert!(signals_active.deep_focus_block);
+    }
+
+    #[test]
+    fn test_deep_focus_block_requires_low_idle() {
+        // High continuity but high idle = NOT deep focus
+        let keyboard = KeyboardFeatures {
+            session_continuity: 0.9,
+            typing_tap_count: 50,
+            ..Default::default()
+        };
+
+        let mouse = MouseFeatures {
+            idle_ratio: 0.5, // Too much idle time
+            ..Default::default()
+        };
+
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+        assert!(!signals.deep_focus_block);
+    }
+
+    #[test]
+    fn test_idle_time_ms_computation() {
+        use crate::collector::types::MouseEvent;
+
+        // Test with mouse events that have gaps
+        let base_time = chrono::Utc::now();
+        let events = vec![
+            MouseEvent {
+                timestamp: base_time,
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+            MouseEvent {
+                timestamp: base_time + chrono::Duration::milliseconds(500),
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+            MouseEvent {
+                timestamp: base_time + chrono::Duration::milliseconds(2000), // 1500ms gap
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+        ];
+
+        let features = compute_mouse_features(&events, 2.0);
+
+        // Should have some idle time (gap of 1500ms, 500ms over threshold)
+        assert!(features.idle_time_ms > 0);
+        assert!(features.idle_ratio > 0.0);
+    }
+
+    #[test]
+    fn test_behavioral_signals_new_fields_bounds() {
+        // Test that all new behavioral signals are properly bounded
+        let keyboard = KeyboardFeatures {
+            burst_index: 0.5,
+            session_continuity: 0.5,
+            typing_tap_count: 10,
+            ..Default::default()
+        };
+
+        let mouse = MouseFeatures {
+            idle_ratio: 0.5,
+            mouse_activity_rate: 1.0,
+            ..Default::default()
+        };
+
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // All signals should be bounded 0-1
+        assert!(signals.interaction_rhythm >= 0.0 && signals.interaction_rhythm <= 1.0);
+        assert!(signals.friction >= 0.0 && signals.friction <= 1.0);
+        assert!(signals.motor_stability >= 0.0 && signals.motor_stability <= 1.0);
+        assert!(signals.focus_continuity_proxy >= 0.0 && signals.focus_continuity_proxy <= 1.0);
+        assert!(signals.burstiness >= 0.0 && signals.burstiness <= 1.0);
+        // deep_focus_block is a boolean, no bounds check needed
     }
 }

@@ -5,23 +5,73 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Classification of keyboard events for behavioral analysis.
+///
+/// Privacy guarantee: This classification does NOT capture which specific key was pressed,
+/// only whether it belongs to a navigation class (arrows, page up/down, home/end) or
+/// is a regular typing key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum KeyboardEventType {
+    /// Regular typing key (letters, numbers, symbols, space, backspace, etc.)
+    #[default]
+    TypingTap,
+    /// Navigation key (arrow keys, Page Up/Down, Home, End)
+    /// These are used for scrolling/navigation and should not inflate typing metrics
+    NavigationKey,
+}
+
 /// A keyboard event capturing only timing information.
 ///
 /// Privacy guarantee: No key codes, characters, or any content is captured.
+/// The event_type field only indicates if this is a navigation key or typing key,
+/// not which specific key was pressed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardEvent {
     /// Timestamp when the event occurred
     pub timestamp: DateTime<Utc>,
     /// Whether this is a key press (true) or release (false)
     pub is_key_down: bool,
+    /// Classification of the key event (typing vs navigation)
+    #[serde(default)]
+    pub event_type: KeyboardEventType,
 }
 
 impl KeyboardEvent {
+    /// Create a new typing tap event (regular key press/release).
     pub fn new(is_key_down: bool) -> Self {
         Self {
             timestamp: Utc::now(),
             is_key_down,
+            event_type: KeyboardEventType::TypingTap,
         }
+    }
+
+    /// Create a new keyboard event with explicit type classification.
+    pub fn with_type(is_key_down: bool, event_type: KeyboardEventType) -> Self {
+        Self {
+            timestamp: Utc::now(),
+            is_key_down,
+            event_type,
+        }
+    }
+
+    /// Create a navigation key event (arrow keys, page up/down, home/end).
+    pub fn navigation(is_key_down: bool) -> Self {
+        Self {
+            timestamp: Utc::now(),
+            is_key_down,
+            event_type: KeyboardEventType::NavigationKey,
+        }
+    }
+
+    /// Check if this is a typing tap (not a navigation key).
+    pub fn is_typing_tap(&self) -> bool {
+        self.event_type == KeyboardEventType::TypingTap
+    }
+
+    /// Check if this is a navigation key.
+    pub fn is_navigation_key(&self) -> bool {
+        self.event_type == KeyboardEventType::NavigationKey
     }
 }
 
@@ -180,5 +230,31 @@ mod tests {
 
         let large = MouseEvent::scroll(0.0, 15.0);
         assert_eq!(large.scroll_magnitude, Some(ScrollMagnitude::Large));
+    }
+
+    #[test]
+    fn test_keyboard_event_type_default() {
+        let event = KeyboardEvent::new(true);
+        assert_eq!(event.event_type, KeyboardEventType::TypingTap);
+        assert!(event.is_typing_tap());
+        assert!(!event.is_navigation_key());
+    }
+
+    #[test]
+    fn test_keyboard_navigation_event() {
+        let event = KeyboardEvent::navigation(true);
+        assert_eq!(event.event_type, KeyboardEventType::NavigationKey);
+        assert!(!event.is_typing_tap());
+        assert!(event.is_navigation_key());
+    }
+
+    #[test]
+    fn test_keyboard_event_with_type() {
+        let typing = KeyboardEvent::with_type(true, KeyboardEventType::TypingTap);
+        assert!(typing.is_typing_tap());
+
+        let nav = KeyboardEvent::with_type(false, KeyboardEventType::NavigationKey);
+        assert!(nav.is_navigation_key());
+        assert!(!nav.is_key_down);
     }
 }

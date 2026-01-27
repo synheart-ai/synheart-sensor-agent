@@ -3,7 +3,7 @@
 //! This module captures keyboard and mouse events at the system level using
 //! macOS's Core Graphics event tap API. It requires Input Monitoring permission.
 
-use crate::collector::types::{KeyboardEvent, MouseEvent, SensorEvent};
+use crate::collector::types::{KeyboardEvent, KeyboardEventType, MouseEvent, SensorEvent};
 use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
 use core_graphics::event::{
     CGEvent, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
@@ -244,19 +244,78 @@ fn run_event_loop(
     Ok(())
 }
 
+/// Check if a key code corresponds to a navigation key.
+///
+/// Navigation keys are: Arrow keys, Page Up/Down, Home, End.
+/// These are used for scrolling/navigation and should not inflate typing metrics.
+///
+/// Privacy: The key code is only used for classification - it is NOT stored or transmitted.
+/// Only the boolean classification (navigation vs typing) is recorded.
+fn is_navigation_key(keycode: i64) -> bool {
+    // macOS virtual key codes for navigation keys
+    const KEY_LEFT_ARROW: i64 = 123;
+    const KEY_RIGHT_ARROW: i64 = 124;
+    const KEY_DOWN_ARROW: i64 = 125;
+    const KEY_UP_ARROW: i64 = 126;
+    const KEY_PAGE_UP: i64 = 116;
+    const KEY_PAGE_DOWN: i64 = 121;
+    const KEY_HOME: i64 = 115;
+    const KEY_END: i64 = 119;
+
+    matches!(
+        keycode,
+        KEY_LEFT_ARROW
+            | KEY_RIGHT_ARROW
+            | KEY_DOWN_ARROW
+            | KEY_UP_ARROW
+            | KEY_PAGE_UP
+            | KEY_PAGE_DOWN
+            | KEY_HOME
+            | KEY_END
+    )
+}
+
+/// Classify a keyboard event as navigation or typing based on key code.
+///
+/// Privacy: The key code is used only for classification and is immediately discarded.
+/// The actual key code value is never stored or transmitted.
+fn classify_keyboard_event(event: &CGEvent) -> KeyboardEventType {
+    let keycode =
+        event.get_integer_value_field(core_graphics::event::EventField::KEYBOARD_EVENT_KEYCODE);
+
+    if is_navigation_key(keycode) {
+        KeyboardEventType::NavigationKey
+    } else {
+        KeyboardEventType::TypingTap
+    }
+}
+
 /// Process a CGEvent and convert it to a SensorEvent.
 ///
 /// Privacy: This function ONLY extracts timing and magnitude information,
-/// never key codes, characters, or absolute coordinates.
+/// never key codes, characters, or absolute coordinates. Key codes are used
+/// internally only to classify events as navigation vs typing, then discarded.
 fn process_cg_event(event_type: CGEventType, event: &CGEvent) -> Option<SensorEvent> {
     use core_graphics::event::CGEventType::*;
 
     match event_type {
-        // Keyboard events - capture timing only, NO key codes
-        KeyDown => Some(SensorEvent::Keyboard(KeyboardEvent::new(true))),
-        KeyUp => Some(SensorEvent::Keyboard(KeyboardEvent::new(false))),
+        // Keyboard events - capture timing and classification only, NO key codes stored
+        KeyDown => {
+            let event_class = classify_keyboard_event(event);
+            Some(SensorEvent::Keyboard(KeyboardEvent::with_type(
+                true,
+                event_class,
+            )))
+        }
+        KeyUp => {
+            let event_class = classify_keyboard_event(event);
+            Some(SensorEvent::Keyboard(KeyboardEvent::with_type(
+                false,
+                event_class,
+            )))
+        }
         FlagsChanged => {
-            // Modifier key change - treat as key event
+            // Modifier key change - treat as typing key event (not navigation)
             // We can't easily determine down/up for modifiers, so we just record it
             Some(SensorEvent::Keyboard(KeyboardEvent::new(true)))
         }
