@@ -262,6 +262,57 @@ The agent exports data in HSI 1.0 (Human State Interface) JSON format:
 | `friction` | Hesitation/correction indicator |
 | `motor_stability` | Movement consistency |
 | `focus_continuity_proxy` | Sustained attention indicator |
+| `burstiness` | Whether interactions occur in clusters or evenly |
+| `deep_focus_block` | True if window shows sustained, uninterrupted activity |
+
+### Additional Metrics 
+
+| Metric | Description |
+|--------|-------------|
+| `typing_tap_count` | Total discrete typing key events |
+| `typing_cadence_stability` | Rhythmic consistency of typing (0-1) |
+| `typing_gap_ratio` | Proportion of inter-tap intervals as gaps |
+| `typing_interaction_intensity` | Composite of speed, stability, gap behavior |
+| `keyboard_scroll_rate` | Navigation keys (arrows, PgUp/Dn) per second |
+| `navigation_key_count` | Total navigation key events |
+| `idle_time_ms` | Total idle time in milliseconds |
+
+## Metric Provenance
+
+This section clarifies where each behavioral metric is computed to prevent confusion when integrating with downstream systems.
+
+### Computed Locally (Sensor Agent)
+
+These metrics are computed directly in the sensor agent from raw event timing:
+
+| Category | Metrics |
+|----------|---------|
+| **Keyboard (Typing)** | `typing_rate`, `pause_count`, `mean_pause_ms`, `latency_variability`, `hold_time_mean`, `burst_index`, `session_continuity`, `typing_tap_count`, `typing_cadence_stability`, `typing_gap_ratio`, `typing_interaction_intensity` |
+| **Keyboard (Navigation)** | `keyboard_scroll_rate`, `navigation_key_count` |
+| **Mouse** | `mouse_activity_rate`, `mean_velocity`, `velocity_variability`, `acceleration_spikes`, `click_rate`, `scroll_rate`, `idle_ratio`, `micro_adjustment_ratio`, `idle_time_ms` |
+| **Behavioral (Derived)** | `interaction_rhythm`, `friction`, `motor_stability`, `focus_continuity_proxy`, `burstiness`, `deep_focus_block` |
+
+### Enriched in Flux (Optional)
+
+When the `--flux` flag is enabled, these additional metrics are computed using rolling baselines:
+
+| Metric | Description |
+|--------|-------------|
+| `distraction_score` | Aggregate estimate of distraction |
+| `focus_hint` | Aggregate estimate of focus |
+| `interaction_intensity` | Flux-computed interaction intensity |
+
+See [`SYNHEART_FLUX_INTEGRATION.md`](SYNHEART_FLUX_INTEGRATION.md) for details.
+
+### Not Captured (Privacy Policy)
+
+The following metrics mentioned in behavioral research are **intentionally not captured** because they require application context, which violates our privacy policy:
+
+| Metric | Reason Not Captured |
+|--------|---------------------|
+| `task_switch_rate` | Requires app/window tracking |
+| `task_switch_cost` | Requires app/window tracking |
+| `app_context` | Violates privacy guarantees |
 
 ## Configuration
 
