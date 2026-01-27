@@ -695,8 +695,10 @@ mod tests {
     #[test]
     fn test_burstiness_high_burst_index() {
         // High keyboard burst_index should increase burstiness
-        let mut keyboard = KeyboardFeatures::default();
-        keyboard.burst_index = 0.9; // Very bursty typing
+        let keyboard = KeyboardFeatures {
+            burst_index: 0.9, // Very bursty typing
+            ..Default::default()
+        };
 
         let mouse = MouseFeatures::default();
         let signals = compute_behavioral_signals(&keyboard, &mouse);
@@ -715,13 +717,17 @@ mod tests {
         assert!(!signals.deep_focus_block);
 
         // High continuity, low idle, some activity = deep focus
-        let mut keyboard_active = KeyboardFeatures::default();
-        keyboard_active.session_continuity = 0.9; // High continuity
-        keyboard_active.typing_tap_count = 50; // Some activity
+        let keyboard_active = KeyboardFeatures {
+            session_continuity: 0.9, // High continuity
+            typing_tap_count: 50,    // Some activity
+            ..Default::default()
+        };
 
-        let mut mouse_active = MouseFeatures::default();
-        mouse_active.idle_ratio = 0.1; // Low idle ratio
-        mouse_active.mouse_activity_rate = 2.0;
+        let mouse_active = MouseFeatures {
+            idle_ratio: 0.1, // Low idle ratio
+            mouse_activity_rate: 2.0,
+            ..Default::default()
+        };
 
         let signals_active = compute_behavioral_signals(&keyboard_active, &mouse_active);
         assert!(signals_active.deep_focus_block);
@@ -730,12 +736,16 @@ mod tests {
     #[test]
     fn test_deep_focus_block_requires_low_idle() {
         // High continuity but high idle = NOT deep focus
-        let mut keyboard = KeyboardFeatures::default();
-        keyboard.session_continuity = 0.9;
-        keyboard.typing_tap_count = 50;
+        let keyboard = KeyboardFeatures {
+            session_continuity: 0.9,
+            typing_tap_count: 50,
+            ..Default::default()
+        };
 
-        let mut mouse = MouseFeatures::default();
-        mouse.idle_ratio = 0.5; // Too much idle time
+        let mouse = MouseFeatures {
+            idle_ratio: 0.5, // Too much idle time
+            ..Default::default()
+        };
 
         let signals = compute_behavioral_signals(&keyboard, &mouse);
         assert!(!signals.deep_focus_block);
@@ -781,14 +791,18 @@ mod tests {
     #[test]
     fn test_behavioral_signals_new_fields_bounds() {
         // Test that all new behavioral signals are properly bounded
-        let mut keyboard = KeyboardFeatures::default();
-        keyboard.burst_index = 0.5;
-        keyboard.session_continuity = 0.5;
-        keyboard.typing_tap_count = 10;
+        let keyboard = KeyboardFeatures {
+            burst_index: 0.5,
+            session_continuity: 0.5,
+            typing_tap_count: 10,
+            ..Default::default()
+        };
 
-        let mut mouse = MouseFeatures::default();
-        mouse.idle_ratio = 0.5;
-        mouse.mouse_activity_rate = 1.0;
+        let mouse = MouseFeatures {
+            idle_ratio: 0.5,
+            mouse_activity_rate: 1.0,
+            ..Default::default()
+        };
 
         let signals = compute_behavioral_signals(&keyboard, &mouse);
 
