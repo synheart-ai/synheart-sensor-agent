@@ -63,9 +63,16 @@ pub struct MouseFeatures {
     pub idle_ratio: f64,
     /// Ratio of small movements to total movements
     pub micro_adjustment_ratio: f64,
+    /// Total idle time in milliseconds (periods with no mouse activity > 1 second)
+    pub idle_time_ms: u64,
 }
 
 /// Derived behavioral signals combining keyboard and mouse data.
+///
+/// Metric Provenance:
+/// - These signals are computed locally in the sensor agent
+/// - Additional enriched signals (distraction_score, focus_hint) are computed in Flux
+/// - Task switch metrics are NOT captured (requires app context, violates privacy policy)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BehavioralSignals {
     /// Overall interaction rhythm (regularity of input)
@@ -76,6 +83,14 @@ pub struct BehavioralSignals {
     pub motor_stability: f64,
     /// Proxy for focus/attention continuity
     pub focus_continuity_proxy: f64,
+    /// General burstiness of interactions (0-1, higher = more clustered activity)
+    /// Combines keyboard burst_index and mouse activity patterns
+    pub burstiness: f64,
+    /// True if this window represents a deep focus block:
+    /// - Continuous interaction with no idle gaps > 2 seconds
+    /// - High session continuity (> 0.7)
+    /// - Consistent activity throughout the window
+    pub deep_focus_block: bool,
 }
 
 /// All computed features for a window.
@@ -307,8 +322,9 @@ fn compute_mouse_features(events: &[MouseEvent], window_duration: f64) -> MouseF
     let click_rate = click_events.len() as f64 / window_duration;
     let scroll_rate = scroll_events.len() as f64 / window_duration;
 
-    // Idle ratio: estimate based on gaps in movement events
-    let idle_ratio = estimate_idle_ratio(&move_events, window_duration);
+    // Idle metrics: estimate based on gaps in movement events
+    let (idle_ratio, idle_time_ms, _has_long_gap) =
+        estimate_idle_metrics(&move_events, window_duration);
 
     // Micro-adjustment ratio: small movements vs all movements
     let micro_count = velocities
@@ -330,28 +346,42 @@ fn compute_mouse_features(events: &[MouseEvent], window_duration: f64) -> MouseF
         scroll_rate,
         idle_ratio,
         micro_adjustment_ratio,
+        idle_time_ms,
     }
 }
 
-/// Estimate idle ratio from movement event gaps.
-fn estimate_idle_ratio(move_events: &[&MouseEvent], window_duration: f64) -> f64 {
+/// Estimate idle metrics from movement event gaps.
+/// Returns (idle_ratio, idle_time_ms, has_long_gap).
+/// has_long_gap is true if any gap exceeds 2 seconds (used for deep focus detection).
+fn estimate_idle_metrics(move_events: &[&MouseEvent], window_duration: f64) -> (f64, u64, bool) {
     if move_events.len() < 2 {
-        return 1.0; // No movement = all idle
+        // No movement = all idle
+        let total_idle = (window_duration * 1000.0) as u64;
+        return (1.0, total_idle, true);
     }
 
     // Consider gaps > 1 second as "idle"
     const IDLE_THRESHOLD_MS: i64 = 1000;
+    // Consider gaps > 2 seconds as "long gaps" (breaks deep focus)
+    const LONG_GAP_THRESHOLD_MS: i64 = 2000;
 
     let mut idle_time_ms: i64 = 0;
+    let mut has_long_gap = false;
+
     for pair in move_events.windows(2) {
         let gap = (pair[1].timestamp - pair[0].timestamp).num_milliseconds();
         if gap > IDLE_THRESHOLD_MS {
             idle_time_ms += gap - IDLE_THRESHOLD_MS; // Count only the excess as idle
         }
+        if gap > LONG_GAP_THRESHOLD_MS {
+            has_long_gap = true;
+        }
     }
 
     let idle_secs = idle_time_ms as f64 / 1000.0;
-    (idle_secs / window_duration).min(1.0)
+    let idle_ratio = (idle_secs / window_duration).min(1.0);
+
+    (idle_ratio, idle_time_ms.max(0) as u64, has_long_gap)
 }
 
 /// Compute derived behavioral signals from keyboard and mouse features.
@@ -381,11 +411,35 @@ fn compute_behavioral_signals(
     // High session continuity, low idle ratio
     let focus_continuity_proxy = keyboard.session_continuity * 0.5 + (1.0 - mouse.idle_ratio) * 0.5;
 
+    // Burstiness: general measure of whether interactions occur in clusters or evenly
+    // Combines keyboard burst_index with mouse activity patterns
+    // High burstiness = interactions come in bursts with gaps between
+    let keyboard_burstiness = keyboard.burst_index;
+    // Mouse burstiness: high activity rate with high idle ratio indicates bursty behavior
+    let mouse_burstiness = if mouse.mouse_activity_rate > 0.0 {
+        // If there's activity but also significant idle time, it's bursty
+        mouse.idle_ratio * (1.0 - mouse.micro_adjustment_ratio)
+    } else {
+        0.0
+    };
+    let burstiness = (keyboard_burstiness * 0.6 + mouse_burstiness * 0.4).clamp(0.0, 1.0);
+
+    // Deep focus block detection:
+    // - High session continuity (> 0.7) - sustained typing activity
+    // - Low idle ratio (< 0.3) - minimal gaps in mouse activity
+    // - Some minimum activity (typing or mouse) to confirm engagement
+    let has_activity = keyboard.typing_tap_count > 0 || mouse.mouse_activity_rate > 0.5;
+    let sustained_typing = keyboard.session_continuity > 0.7;
+    let minimal_idle = mouse.idle_ratio < 0.3;
+    let deep_focus_block = has_activity && sustained_typing && minimal_idle;
+
     BehavioralSignals {
         interaction_rhythm: interaction_rhythm.clamp(0.0, 1.0),
         friction: friction.clamp(0.0, 1.0),
         motor_stability: motor_stability.clamp(0.0, 1.0),
         focus_continuity_proxy: focus_continuity_proxy.clamp(0.0, 1.0),
+        burstiness,
+        deep_focus_block,
     }
 }
 
@@ -626,5 +680,124 @@ mod tests {
         let features = compute_keyboard_features(&nav_events, 1.0);
         assert_eq!(features.navigation_key_count, 3);
         assert!(features.keyboard_scroll_rate > 0.0);
+    }
+
+    #[test]
+    fn test_burstiness_bounds() {
+        let keyboard = KeyboardFeatures::default();
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // Burstiness should be between 0 and 1
+        assert!(signals.burstiness >= 0.0 && signals.burstiness <= 1.0);
+    }
+
+    #[test]
+    fn test_burstiness_high_burst_index() {
+        // High keyboard burst_index should increase burstiness
+        let mut keyboard = KeyboardFeatures::default();
+        keyboard.burst_index = 0.9; // Very bursty typing
+
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // Should have elevated burstiness
+        assert!(signals.burstiness > 0.4);
+        assert!(signals.burstiness <= 1.0);
+    }
+
+    #[test]
+    fn test_deep_focus_block_detection() {
+        // Default (empty) features should NOT be deep focus
+        let keyboard = KeyboardFeatures::default();
+        let mouse = MouseFeatures::default();
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+        assert!(!signals.deep_focus_block);
+
+        // High continuity, low idle, some activity = deep focus
+        let mut keyboard_active = KeyboardFeatures::default();
+        keyboard_active.session_continuity = 0.9; // High continuity
+        keyboard_active.typing_tap_count = 50; // Some activity
+
+        let mut mouse_active = MouseFeatures::default();
+        mouse_active.idle_ratio = 0.1; // Low idle ratio
+        mouse_active.mouse_activity_rate = 2.0;
+
+        let signals_active = compute_behavioral_signals(&keyboard_active, &mouse_active);
+        assert!(signals_active.deep_focus_block);
+    }
+
+    #[test]
+    fn test_deep_focus_block_requires_low_idle() {
+        // High continuity but high idle = NOT deep focus
+        let mut keyboard = KeyboardFeatures::default();
+        keyboard.session_continuity = 0.9;
+        keyboard.typing_tap_count = 50;
+
+        let mut mouse = MouseFeatures::default();
+        mouse.idle_ratio = 0.5; // Too much idle time
+
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+        assert!(!signals.deep_focus_block);
+    }
+
+    #[test]
+    fn test_idle_time_ms_computation() {
+        use crate::collector::types::MouseEvent;
+
+        // Test with mouse events that have gaps
+        let base_time = chrono::Utc::now();
+        let events = vec![
+            MouseEvent {
+                timestamp: base_time,
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+            MouseEvent {
+                timestamp: base_time + chrono::Duration::milliseconds(500),
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+            MouseEvent {
+                timestamp: base_time + chrono::Duration::milliseconds(2000), // 1500ms gap
+                event_type: MouseEventType::Move,
+                delta_magnitude: Some(10.0),
+                scroll_direction: None,
+                scroll_magnitude: None,
+            },
+        ];
+
+        let features = compute_mouse_features(&events, 2.0);
+
+        // Should have some idle time (gap of 1500ms, 500ms over threshold)
+        assert!(features.idle_time_ms > 0);
+        assert!(features.idle_ratio > 0.0);
+    }
+
+    #[test]
+    fn test_behavioral_signals_new_fields_bounds() {
+        // Test that all new behavioral signals are properly bounded
+        let mut keyboard = KeyboardFeatures::default();
+        keyboard.burst_index = 0.5;
+        keyboard.session_continuity = 0.5;
+        keyboard.typing_tap_count = 10;
+
+        let mut mouse = MouseFeatures::default();
+        mouse.idle_ratio = 0.5;
+        mouse.mouse_activity_rate = 1.0;
+
+        let signals = compute_behavioral_signals(&keyboard, &mouse);
+
+        // All signals should be bounded 0-1
+        assert!(signals.interaction_rhythm >= 0.0 && signals.interaction_rhythm <= 1.0);
+        assert!(signals.friction >= 0.0 && signals.friction <= 1.0);
+        assert!(signals.motor_stability >= 0.0 && signals.motor_stability <= 1.0);
+        assert!(signals.focus_continuity_proxy >= 0.0 && signals.focus_continuity_proxy <= 1.0);
+        assert!(signals.burstiness >= 0.0 && signals.burstiness <= 1.0);
+        // deep_focus_block is a boolean, no bounds check needed
     }
 }

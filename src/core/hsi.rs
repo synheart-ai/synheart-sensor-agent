@@ -402,6 +402,19 @@ impl HsiBuilder {
                         .to_string(),
                 ),
             },
+            // Burstiness (already 0-1)
+            HsiAxisReading {
+                axis: "burstiness".to_string(),
+                score: Some(features.behavioral.burstiness),
+                confidence,
+                window_id: window_id.clone(),
+                direction: Some(HsiDirection::Bidirectional),
+                unit: None,
+                evidence_source_ids: Some(vec![source_id.clone()]),
+                notes: Some(
+                    "Whether interactions occur in clusters (high) or evenly (low)".to_string(),
+                ),
+            },
         ];
 
         // Build axes
@@ -476,6 +489,21 @@ impl HsiBuilder {
             "keyboard_scroll_rate".to_string(),
             serde_json::Value::Number(
                 serde_json::Number::from_f64(features.keyboard.keyboard_scroll_rate)
+                    .unwrap_or(serde_json::Number::from(0)),
+            ),
+        );
+        meta.insert(
+            "idle_time_ms".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(features.mouse.idle_time_ms)),
+        );
+        meta.insert(
+            "deep_focus_block".to_string(),
+            serde_json::Value::Bool(features.behavioral.deep_focus_block),
+        );
+        meta.insert(
+            "burstiness".to_string(),
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(features.behavioral.burstiness)
                     .unwrap_or(serde_json::Number::from(0)),
             ),
         );
