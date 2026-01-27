@@ -3,14 +3,19 @@
 //! This module extracts behavioral features from time windows of events.
 //! All features are computed from timing and magnitude data only - never content.
 
-use crate::collector::types::{KeyboardEvent, MouseEvent, MouseEventType};
+use crate::collector::types::{KeyboardEvent, KeyboardEventType, MouseEvent, MouseEventType};
 use crate::core::windowing::EventWindow;
 use serde::{Deserialize, Serialize};
 
 /// Keyboard-derived behavioral features.
+///
+/// Note: Typing metrics (typing_rate, typing_tap_count, etc.) are computed from
+/// typing keys ONLY. Navigation keys (arrows, page up/down, home/end) are tracked
+/// separately via keyboard_scroll_rate to avoid inflating typing metrics during
+/// navigation-heavy text editing sessions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KeyboardFeatures {
-    /// Keys per second
+    /// Typing keys per second (excludes navigation keys)
     pub typing_rate: f64,
     /// Number of idle gaps (pauses) per window
     pub pause_count: u32,
@@ -24,7 +29,7 @@ pub struct KeyboardFeatures {
     pub burst_index: f64,
     /// Ratio of active typing time to total window time
     pub session_continuity: f64,
-    /// Total number of discrete keyboard tap events
+    /// Total number of discrete typing tap events (excludes navigation keys)
     pub typing_tap_count: u32,
     /// Normalized rhythmic consistency score (0-1, higher = more regular timing)
     pub typing_cadence_stability: f64,
@@ -32,6 +37,11 @@ pub struct KeyboardFeatures {
     pub typing_gap_ratio: f64,
     /// Composite metric combining speed, cadence stability, and gap behavior (0-1)
     pub typing_interaction_intensity: f64,
+    /// Navigation key events per second (arrow keys, page up/down, home/end)
+    /// Tracked separately from typing to distinguish keyboard scrolling from mouse scrolling
+    pub keyboard_scroll_rate: f64,
+    /// Total navigation key events in the window
+    pub navigation_key_count: u32,
 }
 
 /// Mouse-derived behavioral features.
@@ -99,20 +109,48 @@ pub fn compute_features(window: &EventWindow) -> WindowFeatures {
 }
 
 /// Compute keyboard features from a list of keyboard events.
+///
+/// Typing metrics are computed from typing key events ONLY (excludes navigation keys).
+/// Navigation keys (arrows, page up/down, home/end) are tracked separately via
+/// keyboard_scroll_rate to distinguish keyboard scrolling from mouse scrolling.
 fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> KeyboardFeatures {
     if events.is_empty() || window_duration <= 0.0 {
         return KeyboardFeatures::default();
     }
 
-    // Count key presses (key down events)
-    let key_presses: Vec<&KeyboardEvent> = events.iter().filter(|e| e.is_key_down).collect();
-    let key_press_count = key_presses.len();
+    // Separate typing events from navigation events
+    let typing_events: Vec<&KeyboardEvent> = events
+        .iter()
+        .filter(|e| e.event_type == KeyboardEventType::TypingTap)
+        .collect();
 
-    // Typing rate
-    let typing_rate = key_press_count as f64 / window_duration;
+    let navigation_events: Vec<&KeyboardEvent> = events
+        .iter()
+        .filter(|e| e.event_type == KeyboardEventType::NavigationKey)
+        .collect();
 
-    // Compute inter-key intervals for key presses
-    let intervals: Vec<i64> = key_presses
+    // Count navigation key presses (key down events only)
+    let navigation_key_presses: Vec<&KeyboardEvent> = navigation_events
+        .iter()
+        .filter(|e| e.is_key_down)
+        .copied()
+        .collect();
+    let navigation_key_count = navigation_key_presses.len() as u32;
+    let keyboard_scroll_rate = navigation_key_count as f64 / window_duration;
+
+    // Count typing key presses (key down events only) - EXCLUDES navigation keys
+    let typing_key_presses: Vec<&KeyboardEvent> = typing_events
+        .iter()
+        .filter(|e| e.is_key_down)
+        .copied()
+        .collect();
+    let typing_tap_count = typing_key_presses.len() as u32;
+
+    // Typing rate (typing keys only)
+    let typing_rate = typing_tap_count as f64 / window_duration;
+
+    // Compute inter-key intervals for typing key presses only
+    let intervals: Vec<i64> = typing_key_presses
         .windows(2)
         .map(|pair| (pair[1].timestamp - pair[0].timestamp).num_milliseconds())
         .collect();
@@ -134,8 +172,8 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
     let latency_variability = std_dev(&intervals.iter().map(|&i| i as f64).collect::<Vec<_>>());
 
     // Hold time computation (requires matching key down/up pairs)
-    // For simplicity, we estimate from consecutive down/up events
-    let hold_times = compute_hold_times(events);
+    // Only compute from typing events to avoid navigation key hold times
+    let hold_times = compute_hold_times(&typing_events);
     let hold_time_mean = if hold_times.is_empty() {
         0.0
     } else {
@@ -160,9 +198,6 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
         .collect();
     let active_time_ms: i64 = active_intervals.iter().sum();
     let session_continuity = (active_time_ms as f64 / 1000.0) / window_duration;
-
-    // Typing tap count: total discrete keyboard tap events (key presses)
-    let typing_tap_count = key_press_count as u32;
 
     // Typing cadence stability: normalized rhythmic consistency (0-1, higher = more regular)
     // Inverse relationship with latency variability
@@ -195,11 +230,13 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
         typing_cadence_stability,
         typing_gap_ratio,
         typing_interaction_intensity,
+        keyboard_scroll_rate,
+        navigation_key_count,
     }
 }
 
 /// Estimate hold times from event sequence.
-fn compute_hold_times(events: &[KeyboardEvent]) -> Vec<f64> {
+fn compute_hold_times(events: &[&KeyboardEvent]) -> Vec<f64> {
     let mut hold_times = Vec::new();
     let mut last_down: Option<&KeyboardEvent> = None;
 
@@ -372,6 +409,15 @@ mod tests {
         KeyboardEvent {
             timestamp: Utc::now() + Duration::milliseconds(offset_ms),
             is_key_down: is_down,
+            event_type: KeyboardEventType::TypingTap,
+        }
+    }
+
+    fn make_navigation_event(is_down: bool, offset_ms: i64) -> KeyboardEvent {
+        KeyboardEvent {
+            timestamp: Utc::now() + Duration::milliseconds(offset_ms),
+            is_key_down: is_down,
+            event_type: KeyboardEventType::NavigationKey,
         }
     }
 
@@ -512,5 +558,73 @@ mod tests {
         );
         // Fast regular typing should have moderate to high intensity
         assert!(features.typing_interaction_intensity > 0.3);
+    }
+
+    #[test]
+    fn test_navigation_key_separation() {
+        // Mix of typing and navigation events
+        let events = vec![
+            make_keyboard_event(true, 0),      // typing
+            make_keyboard_event(false, 50),    // typing
+            make_navigation_event(true, 100),  // navigation (arrow key)
+            make_navigation_event(false, 150), // navigation
+            make_keyboard_event(true, 200),    // typing
+            make_keyboard_event(false, 250),   // typing
+            make_navigation_event(true, 300),  // navigation
+            make_navigation_event(false, 350), // navigation
+        ];
+
+        let features = compute_keyboard_features(&events, 1.0);
+
+        // Should only count typing key presses (2 typing events)
+        assert_eq!(features.typing_tap_count, 2);
+        assert_eq!(features.typing_rate, 2.0);
+
+        // Should count navigation key presses separately (2 navigation events)
+        assert_eq!(features.navigation_key_count, 2);
+        assert_eq!(features.keyboard_scroll_rate, 2.0);
+    }
+
+    #[test]
+    fn test_navigation_keys_dont_inflate_typing_metrics() {
+        // Only navigation events - typing metrics should be zero/default
+        let nav_only_events = vec![
+            make_navigation_event(true, 0),
+            make_navigation_event(false, 50),
+            make_navigation_event(true, 100),
+            make_navigation_event(false, 150),
+            make_navigation_event(true, 200),
+            make_navigation_event(false, 250),
+        ];
+
+        let features = compute_keyboard_features(&nav_only_events, 1.0);
+
+        // Typing metrics should be zero
+        assert_eq!(features.typing_tap_count, 0);
+        assert_eq!(features.typing_rate, 0.0);
+
+        // Navigation metrics should be counted
+        assert_eq!(features.navigation_key_count, 3);
+        assert_eq!(features.keyboard_scroll_rate, 3.0);
+    }
+
+    #[test]
+    fn test_keyboard_scroll_rate_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert_eq!(features_empty.keyboard_scroll_rate, 0.0);
+        assert_eq!(features_empty.navigation_key_count, 0);
+
+        // Navigation-heavy session
+        let nav_events = vec![
+            make_navigation_event(true, 0),
+            make_navigation_event(false, 30),
+            make_navigation_event(true, 60),
+            make_navigation_event(false, 90),
+            make_navigation_event(true, 120),
+            make_navigation_event(false, 150),
+        ];
+        let features = compute_keyboard_features(&nav_events, 1.0);
+        assert_eq!(features.navigation_key_count, 3);
+        assert!(features.keyboard_scroll_rate > 0.0);
     }
 }

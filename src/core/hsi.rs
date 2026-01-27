@@ -388,6 +388,20 @@ impl HsiBuilder {
                 evidence_source_ids: Some(vec![source_id.clone()]),
                 notes: Some("Composite of speed, cadence stability, and gap behavior".to_string()),
             },
+            // Keyboard scroll rate (normalized to 0-1, capped at 5 keys/sec)
+            HsiAxisReading {
+                axis: "keyboard_scroll_rate".to_string(),
+                score: Some((features.keyboard.keyboard_scroll_rate / 5.0).min(1.0)),
+                confidence,
+                window_id: window_id.clone(),
+                direction: Some(HsiDirection::HigherIsMore),
+                unit: Some("nav_keys_per_sec_normalized".to_string()),
+                evidence_source_ids: Some(vec![source_id.clone()]),
+                notes: Some(
+                    "Navigation keys (arrows, page up/down) - separate from mouse scroll"
+                        .to_string(),
+                ),
+            },
         ];
 
         // Build axes
@@ -451,6 +465,19 @@ impl HsiBuilder {
         meta.insert(
             "typing_tap_count".to_string(),
             serde_json::Value::Number(serde_json::Number::from(features.keyboard.typing_tap_count)),
+        );
+        meta.insert(
+            "navigation_key_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(
+                features.keyboard.navigation_key_count,
+            )),
+        );
+        meta.insert(
+            "keyboard_scroll_rate".to_string(),
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(features.keyboard.keyboard_scroll_rate)
+                    .unwrap_or(serde_json::Number::from(0)),
+            ),
         );
 
         HsiSnapshot {
