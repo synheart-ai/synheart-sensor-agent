@@ -228,10 +228,9 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
     // Typing interaction intensity: composite metric (0-1)
     // Combines normalized speed, cadence stability, and inverse gap ratio
     let normalized_speed = (typing_rate / 10.0).min(1.0); // Normalize to ~10 keys/sec max
-    let typing_interaction_intensity = (normalized_speed * 0.4
-        + typing_cadence_stability * 0.3
-        + (1.0 - typing_gap_ratio) * 0.3)
-        .clamp(0.0, 1.0);
+    let typing_interaction_intensity =
+        (normalized_speed * 0.4 + typing_cadence_stability * 0.3 + (1.0 - typing_gap_ratio) * 0.3)
+            .clamp(0.0, 1.0);
 
     KeyboardFeatures {
         typing_rate,
