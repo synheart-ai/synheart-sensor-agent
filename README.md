@@ -1,8 +1,11 @@
 # Synheart Sensor Agent
 
-[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/synheart-ai/synheart-sensor-agent/.github/workflows/ci.yml)
+[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/synheart-ai/synheart-sensor-agent?sort=semver)](https://github.com/synheart-ai/synheart-sensor-agent/releases)
+[![Issues](https://img.shields.io/github/issues/synheart-ai/synheart-sensor-agent)](https://github.com/synheart-ai/synheart-sensor-agent/issues)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Security Policy](https://img.shields.io/badge/security-policy-blue)](SECURITY.md)
 
 A privacy-first PC background sensor that captures keyboard and mouse interaction timing (not content) for behavioral research.
 
@@ -14,9 +17,56 @@ Synheart Sensor Agent collects behavioral timing data from keyboard and mouse in
 
 - **Privacy by Design**: Never captures key content, passwords, or screen coordinates
 - **Behavioral Features**: Extracts 16+ behavioral signals from interaction patterns
-- **HSI Format**: Exports data in the Human Sensor Interface (HSI) JSON format
+- **HSI Format**: Exports data in the Human State Interface (HSI) JSON format ( via Synheart Flux )
 - **Transparency**: Full visibility into what data is collected via `status` command
 - **macOS Support**: Native integration using Core Graphics event taps
+
+## Core Gateway Integration
+
+For real-time HSI processing via [synheart-core-gateway](https://github.com/synheart-ai/synheart-core-gateway), enable the `gateway` feature:
+
+```bash
+# Build with gateway support
+cargo build --release --features gateway
+
+# Start with gateway sync (auto-detects port/token from runtime dir)
+./target/release/synheart-sensor start --gateway
+
+# Or specify port and token manually
+./target/release/synheart-sensor start --gateway --gateway-port 8080 --gateway-token your-token
+
+# Customize sync interval (default: 10 seconds)
+./target/release/synheart-sensor start --gateway --sync-interval 5
+```
+
+The gateway client reads configuration from:
+- Port: `~/Library/Application Support/SyniLife/runtime/gateway.port`
+- Token: `~/Library/Application Support/SyniLife/runtime/gateway.token`
+
+When connected, you'll see HSI state updates:
+```
+[Gateway] Synced 3 snapshots | HSI: focus: high, load: moderate, recovery: good
+```
+
+## Synheart Flux Integration (Optional)
+
+For rolling baselines and enriched HSI metrics, enable the optional `flux` feature and runtime flag:
+
+```bash
+cargo build --release --features flux
+./target/release/synheart-sensor start --flux
+```
+
+Full guide: [`SYNHEART_FLUX_INTEGRATION.md`](SYNHEART_FLUX_INTEGRATION.md)
+
+## Combined Features
+
+Enable both gateway sync and local flux processing:
+
+```bash
+cargo build --release --features "gateway,flux"
+./target/release/synheart-sensor start --gateway --flux
+```
 
 ## Privacy Guarantees
 
@@ -41,7 +91,7 @@ Synheart Sensor Agent collects behavioral timing data from keyboard and mouse in
 
 ```bash
 # Clone the repository
-git clone https://github.com/synheart/synheart-sensor-agent.git
+git clone https://github.com/synheart-ai/synheart-sensor-agent.git
 cd synheart-sensor-agent
 
 # Build in release mode
@@ -121,64 +171,58 @@ Instance ID: 550e8400-e29b-41d4-a716-446655440000
 
 ## HSI Output Format
 
-The agent exports data in HSI (Human Sensor Interface) JSON format:
+The agent exports data in HSI 1.0 (Human State Interface) JSON format:
 
 ```json
 {
   "hsi_version": "1.0",
+  "observed_at_utc": "2024-01-15T14:32:10+00:00",
+  "computed_at_utc": "2024-01-15T14:32:10+00:00",
   "producer": {
     "name": "synheart-sensor-agent",
     "version": "0.1.0",
     "instance_id": "550e8400-e29b-41d4-a716-446655440000"
   },
-  "window": {
-    "start": "2024-01-15T14:32:00Z",
-    "end": "2024-01-15T14:32:10Z",
-    "duration_secs": 10.0,
-    "is_session_start": false
+  "window_ids": ["w_1705327930000"],
+  "windows": {
+    "w_1705327930000": {
+      "start": "2024-01-15T14:32:00+00:00",
+      "end": "2024-01-15T14:32:10+00:00"
+    }
   },
-  "signals": {
+  "source_ids": ["s_keyboard_mouse_550e8400"],
+  "sources": {
+    "s_keyboard_mouse_550e8400": {
+      "type": "sensor",
+      "quality": 0.85,
+      "degraded": false
+    }
+  },
+  "axes": {
     "behavior": {
-      "keyboard": {
-        "typing_rate": 4.5,
-        "pause_count": 2,
-        "mean_pause_ms": 850.0,
-        "latency_variability": 45.2,
-        "hold_time_mean": 95.0,
-        "burst_index": 0.65,
-        "session_continuity": 0.82
-      },
-      "mouse": {
-        "mouse_activity_rate": 23.4,
-        "mean_velocity": 125.6,
-        "velocity_variability": 89.3,
-        "acceleration_spikes": 5,
-        "click_rate": 0.3,
-        "scroll_rate": 0.8,
-        "idle_ratio": 0.15,
-        "micro_adjustment_ratio": 0.22
-      },
-      "derived": {
-        "interaction_rhythm": 0.72,
-        "friction": 0.25,
-        "motor_stability": 0.68,
-        "focus_continuity_proxy": 0.79
-      }
-    },
-    "event_counts": {
-      "keyboard_events": 45,
-      "mouse_events": 234,
-      "total_events": 279
+      "readings": [
+        { "axis": "typing_rate", "score": 0.45, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "unit": "normalized", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "typing_burstiness", "score": 0.65, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "bidirectional", "unit": "barabasi_index", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "session_continuity", "score": 0.82, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "idle_ratio", "score": 0.15, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "unit": "ratio", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "focus_continuity", "score": 0.79, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "interaction_rhythm", "score": 0.72, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "motor_stability", "score": 0.68, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] },
+        { "axis": "friction", "score": 0.25, "confidence": 0.85, "window_id": "w_1705327930000", "direction": "higher_is_more", "evidence_source_ids": ["s_keyboard_mouse_550e8400"] }
+      ]
     }
   },
   "privacy": {
-    "content_captured": false,
-    "coordinates_captured": false,
-    "data_categories": ["timing", "magnitude", "derived_features"]
+    "contains_pii": false,
+    "raw_biosignals_allowed": false,
+    "derived_metrics_allowed": true,
+    "notes": "No key content or coordinates captured - timing and magnitude only"
   },
-  "device": {
-    "os": "macos",
-    "agent_version": "0.1.0"
+  "meta": {
+    "keyboard_events": 45,
+    "mouse_events": 234,
+    "duration_secs": 10.0,
+    "is_session_start": false
   }
 }
 ```
@@ -241,20 +285,29 @@ Default configuration:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Synheart Sensor Agent                     │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐       │
-│  │  Collector  │──▶│  Windowing  │──▶│  Features   │       │
-│  │   (macOS)   │   │  (10s bins) │   │ (compute)   │       │
-│  └─────────────┘   └─────────────┘   └─────────────┘       │
-│         │                                    │              │
-│         ▼                                    ▼              │
-│  ┌─────────────┐                     ┌─────────────┐       │
-│  │Transparency │                     │    HSI      │       │
-│  │    Log      │                     │  Snapshot   │       │
-│  └─────────────┘                     └─────────────┘       │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Synheart Sensor Agent                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                    │
+│  │  Collector  │──▶│  Windowing  │──▶│  Features   │                    │
+│  │   (macOS)   │   │  (10s bins) │   │ (compute)   │                    │
+│  └─────────────┘   └─────────────┘   └─────────────┘                    │
+│         │                                    │                           │
+│         ▼                                    ▼                           │
+│  ┌─────────────┐                     ┌─────────────┐   ┌─────────────┐  │
+│  │Transparency │                     │    HSI      │──▶│   Gateway   │  │
+│  │    Log      │                     │  Snapshot   │   │   Client    │  │
+│  └─────────────┘                     └─────────────┘   └──────┬──────┘  │
+└───────────────────────────────────────────────────────────────┼─────────┘
+                                                                 │
+                                                                 ▼
+                                                    ┌─────────────────────┐
+                                                    │  Core Gateway       │
+                                                    │  /v1/ingest/behavioral
+                                                    │  ─────────────────  │
+                                                    │  HSI Processing     │
+                                                    │  via synheart-flux  │
+                                                    └─────────────────────┘
 ```
 
 ## Development
@@ -290,6 +343,8 @@ synheart-sensor-agent/
 │   ├── main.rs             # CLI entry point
 │   ├── lib.rs              # Library exports
 │   ├── config.rs           # Configuration management
+│   ├── gateway.rs          # Gateway client (optional, --features gateway)
+│   ├── flux.rs             # Flux integration (optional, --features flux)
 │   ├── core/
 │   │   ├── mod.rs          # Core module
 │   │   ├── windowing.rs    # Window management

@@ -37,7 +37,7 @@ This project follows a Code of Conduct that all contributors are expected to adh
    ```
 3. **Add the upstream remote**:
    ```bash
-   git remote add upstream https://github.com/synheart/synheart-sensor-agent.git
+   git remote add upstream https://github.com/synheart-ai/synheart-sensor-agent.git
    ```
 4. **Create a branch** for your changes:
    ```bash
@@ -396,7 +396,7 @@ For security vulnerabilities, please do NOT create a public issue. Instead, emai
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/synheart/synheart-sensor-agent/discussions) for questions
+- Open a [GitHub Discussion](https://github.com/synheart-ai/synheart-sensor-agent/discussions) for questions
 - Join our community chat (link TBD)
 - Email contributors@synheart.io
 

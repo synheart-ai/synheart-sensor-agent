@@ -17,6 +17,9 @@ use synheart_sensor_agent::{
     PRIVACY_DECLARATION, VERSION,
 };
 
+#[cfg(feature = "gateway")]
+use synheart_sensor_agent::{BlockingGatewayClient, GatewayConfig};
+
 #[derive(Parser)]
 #[command(name = "synheart-sensor")]
 #[command(author = "Synheart")]
@@ -38,6 +41,50 @@ enum Commands {
         /// Run in foreground (don't daemonize)
         #[arg(long)]
         foreground: bool,
+
+        /// Enable synheart-flux baseline tracking (requires flux feature)
+        #[arg(long)]
+        flux: bool,
+
+        /// Baseline window size (number of sessions for rolling baseline)
+        #[arg(long, default_value = "20")]
+        baseline_window: usize,
+
+        /// Enable gateway sync (requires gateway feature)
+        #[arg(long)]
+        gateway: bool,
+
+        /// Gateway port (auto-detected from runtime dir if not specified)
+        #[arg(long)]
+        gateway_port: Option<u16>,
+
+        /// Gateway token (auto-detected from runtime dir if not specified)
+        #[arg(long)]
+        gateway_token: Option<String>,
+
+        /// Sync interval in seconds (how often to sync to gateway)
+        #[arg(long, default_value = "10")]
+        sync_interval: u64,
+    },
+
+    /// Start HTTP server to receive behavioral data from Chrome extension
+    #[cfg(feature = "server")]
+    Serve {
+        /// Port to listen on
+        #[arg(long, default_value = "8081")]
+        port: u16,
+
+        /// Gateway host
+        #[arg(long, default_value = "127.0.0.1")]
+        gateway_host: String,
+
+        /// Gateway port
+        #[arg(long, default_value = "8080")]
+        gateway_port: u16,
+
+        /// Gateway auth token
+        #[arg(long)]
+        gateway_token: String,
     },
 
     /// Pause data collection
@@ -74,8 +121,32 @@ fn main() {
         Commands::Start {
             sources,
             foreground,
+            flux,
+            baseline_window,
+            gateway,
+            gateway_port,
+            gateway_token,
+            sync_interval,
         } => {
-            cmd_start(&sources, foreground);
+            cmd_start(
+                &sources,
+                foreground,
+                flux,
+                baseline_window,
+                gateway,
+                gateway_port,
+                gateway_token,
+                sync_interval,
+            );
+        }
+        #[cfg(feature = "server")]
+        Commands::Serve {
+            port,
+            gateway_host,
+            gateway_port,
+            gateway_token,
+        } => {
+            cmd_serve(port, &gateway_host, gateway_port, &gateway_token);
         }
         Commands::Pause => {
             cmd_pause();
@@ -98,7 +169,18 @@ fn main() {
     }
 }
 
-fn cmd_start(sources: &str, _foreground: bool) {
+#[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
+fn cmd_start(
+    sources: &str,
+    _foreground: bool,
+    enable_flux: bool,
+    baseline_window: usize,
+    enable_gateway: bool,
+    gateway_port: Option<u16>,
+    gateway_token: Option<String>,
+    sync_interval: u64,
+) {
     println!("Synheart Sensor Agent v{VERSION}");
     println!();
 
@@ -145,6 +227,55 @@ fn cmd_start(sources: &str, _foreground: bool) {
         }
     );
     println!("  Window duration: {}s", config.window_duration.as_secs());
+
+    // Show flux status
+    #[cfg(feature = "flux")]
+    if enable_flux {
+        println!("  Flux baseline tracking: enabled (window: {baseline_window} sessions)");
+    } else {
+        println!("  Flux baseline tracking: disabled");
+    }
+    #[cfg(not(feature = "flux"))]
+    if enable_flux {
+        eprintln!("Warning: --flux flag ignored (flux feature not enabled at compile time)");
+    }
+
+    // Show gateway status
+    #[cfg(feature = "gateway")]
+    let gateway_client = if enable_gateway {
+        match create_gateway_client(gateway_port, gateway_token) {
+            Ok(client) => {
+                println!("  Gateway sync: enabled (interval: {sync_interval}s)");
+                println!("  Device ID: {}", client.device_id());
+
+                // Test connection
+                match client.test_connection() {
+                    Ok(true) => println!("  Gateway connection: OK"),
+                    Ok(false) => {
+                        eprintln!("Warning: Gateway health check failed");
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Could not connect to gateway: {e}");
+                    }
+                }
+                Some(client)
+            }
+            Err(e) => {
+                eprintln!("Warning: Gateway initialization failed: {e}");
+                eprintln!("Continuing without gateway sync.");
+                None
+            }
+        }
+    } else {
+        println!("  Gateway sync: disabled");
+        None
+    };
+
+    #[cfg(not(feature = "gateway"))]
+    if enable_gateway {
+        eprintln!("Warning: --gateway flag ignored (gateway feature not enabled at compile time)");
+    }
+
     println!();
     println!("Press Ctrl+C to stop");
     println!();
@@ -173,6 +304,31 @@ fn cmd_start(sources: &str, _foreground: bool) {
     // Storage for completed snapshots
     let mut snapshots: Vec<HsiSnapshot> = Vec::new();
 
+    // Initialize flux processor if enabled
+    #[cfg(feature = "flux")]
+    let mut flux_processor = if enable_flux {
+        let mut processor = synheart_sensor_agent::flux::SensorFluxProcessor::new(baseline_window);
+
+        // Try to load existing baselines
+        let baselines_path = config.data_path.join("flux_baselines.json");
+        if baselines_path.exists() {
+            if let Ok(baselines_json) = std::fs::read_to_string(&baselines_path) {
+                match processor.load_baselines(&baselines_json) {
+                    Ok(_) => println!("Loaded existing baselines from {baselines_path:?}"),
+                    Err(e) => eprintln!("Warning: Could not load baselines: {e}"),
+                }
+            }
+        }
+
+        Some(processor)
+    } else {
+        None
+    };
+
+    // Storage for enriched snapshots (when flux is enabled)
+    #[cfg(feature = "flux")]
+    let mut enriched_snapshots: Vec<synheart_sensor_agent::flux::EnrichedSnapshot> = Vec::new();
+
     // Set up Ctrl+C handler
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -191,6 +347,14 @@ fn cmd_start(sources: &str, _foreground: bool) {
         eprintln!("Error starting collector: {e}");
         std::process::exit(1);
     }
+
+    // Gateway sync state
+    #[cfg(feature = "gateway")]
+    let mut pending_sync_snapshots: Vec<HsiSnapshot> = Vec::new();
+    #[cfg(feature = "gateway")]
+    let mut last_gateway_sync = std::time::Instant::now();
+    #[cfg(feature = "gateway")]
+    let session_id = format!("SESS-{}", Utc::now().timestamp_millis());
 
     // Main event loop
     let receiver = collector.receiver().clone();
@@ -264,6 +428,60 @@ fn cmd_start(sources: &str, _foreground: bool) {
 
             transparency_log.record_window_completed();
 
+            // Process with flux if enabled
+            #[cfg(feature = "flux")]
+            if let Some(ref mut processor) = flux_processor {
+                match processor.process_window(&window, &features, snapshot.clone()) {
+                    Ok(enriched) => {
+                        let baseline_info = if let Some(ref baseline) = enriched.baseline {
+                            format!(
+                                " | baseline: {} sessions, dev: {:.1}%",
+                                baseline.sessions_in_baseline,
+                                baseline.distraction_deviation_pct.unwrap_or(0.0)
+                            )
+                        } else {
+                            String::new()
+                        };
+
+                        let flux_info = if let Some(ref flux) = enriched.flux_behavior {
+                            format!(
+                                " | distraction: {:.2}, focus: {:.2}",
+                                flux.distraction_score, flux.focus_hint
+                            )
+                        } else {
+                            String::new()
+                        };
+
+                        println!(
+                            "[{}] Window completed: {} keyboard, {} mouse events{}{}",
+                            window.end.format("%H:%M:%S"),
+                            window.keyboard_events.len(),
+                            window.mouse_events.len(),
+                            flux_info,
+                            baseline_info
+                        );
+                        enriched_snapshots.push(enriched);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Flux processing failed: {e}");
+                        println!(
+                            "[{}] Window completed: {} keyboard, {} mouse events",
+                            window.end.format("%H:%M:%S"),
+                            window.keyboard_events.len(),
+                            window.mouse_events.len()
+                        );
+                    }
+                }
+            } else {
+                println!(
+                    "[{}] Window completed: {} keyboard, {} mouse events",
+                    window.end.format("%H:%M:%S"),
+                    window.keyboard_events.len(),
+                    window.mouse_events.len()
+                );
+            }
+
+            #[cfg(not(feature = "flux"))]
             println!(
                 "[{}] Window completed: {} keyboard, {} mouse events",
                 window.end.format("%H:%M:%S"),
@@ -271,7 +489,67 @@ fn cmd_start(sources: &str, _foreground: bool) {
                 window.mouse_events.len()
             );
 
-            snapshots.push(snapshot);
+            snapshots.push(snapshot.clone());
+
+            // Add to gateway sync buffer
+            #[cfg(feature = "gateway")]
+            if gateway_client.is_some() {
+                pending_sync_snapshots.push(snapshot);
+            }
+        }
+
+        // Sync to gateway if enabled and interval has passed
+        #[cfg(feature = "gateway")]
+        if let Some(ref client) = gateway_client {
+            if last_gateway_sync.elapsed() >= Duration::from_secs(sync_interval)
+                && !pending_sync_snapshots.is_empty()
+            {
+                match client.sync_snapshots(&pending_sync_snapshots, &session_id) {
+                    Ok(response) => {
+                        if let Some(state) = response.state {
+                            println!(
+                                "[Gateway] Synced {} snapshots | HSI: {}",
+                                pending_sync_snapshots.len(),
+                                state
+                            );
+                        } else {
+                            println!(
+                                "[Gateway] Synced {} snapshots",
+                                pending_sync_snapshots.len()
+                            );
+                        }
+                        pending_sync_snapshots.clear();
+                    }
+                    Err(e) => {
+                        eprintln!("[Gateway] Sync failed: {e}");
+                        // Keep snapshots for retry
+                    }
+                }
+                last_gateway_sync = std::time::Instant::now();
+            }
+        }
+    }
+
+    // Final gateway sync before exit
+    #[cfg(feature = "gateway")]
+    if let Some(ref client) = gateway_client {
+        if !pending_sync_snapshots.is_empty() {
+            println!(
+                "Syncing remaining {} snapshots to gateway...",
+                pending_sync_snapshots.len()
+            );
+            match client.sync_snapshots(&pending_sync_snapshots, &session_id) {
+                Ok(response) => {
+                    if let Some(state) = response.state {
+                        println!("[Gateway] Final sync complete | HSI: {state}");
+                    } else {
+                        println!("[Gateway] Final sync complete");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[Gateway] Final sync failed: {e}");
+                }
+            }
         }
     }
 
@@ -326,9 +604,122 @@ fn cmd_start(sources: &str, _foreground: bool) {
         }
     }
 
+    // Export enriched snapshots if flux was enabled
+    #[cfg(feature = "flux")]
+    if !enriched_snapshots.is_empty() {
+        let enriched_path = config.export_path.join(format!(
+            "session_{}_enriched.json",
+            Utc::now().format("%Y%m%d_%H%M%S")
+        ));
+
+        if let Some(parent) = enriched_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match serde_json::to_string_pretty(&enriched_snapshots) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&enriched_path, json) {
+                    eprintln!("Error writing enriched snapshots: {e}");
+                } else {
+                    println!(
+                        "Exported {} enriched snapshots to {:?}",
+                        enriched_snapshots.len(),
+                        enriched_path
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Error serializing enriched snapshots: {e}");
+            }
+        }
+
+        // Save baselines for next session
+        if let Some(ref processor) = flux_processor {
+            let baselines_path = config.data_path.join("flux_baselines.json");
+            match processor.save_baselines() {
+                Ok(baselines_json) => {
+                    if let Err(e) = std::fs::write(&baselines_path, baselines_json) {
+                        eprintln!("Error saving baselines: {e}");
+                    } else {
+                        println!("Saved baselines to {baselines_path:?}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error serializing baselines: {e}");
+                }
+            }
+        }
+    }
+
     // Final stats
     println!();
     println!("{}", transparency_log.summary());
+}
+
+/// Start HTTP server for receiving behavioral data from Chrome extension
+#[cfg(feature = "server")]
+fn cmd_serve(port: u16, gateway_host: &str, gateway_port: u16, gateway_token: &str) {
+    use synheart_sensor_agent::gateway::GatewayConfig;
+    use synheart_sensor_agent::server::ServerConfig;
+
+    println!("Synheart Sensor Agent v{VERSION}");
+    println!();
+    println!("Starting HTTP server for Chrome extension...");
+    println!("  Listen port: {port}");
+    println!("  Gateway: {gateway_host}:{gateway_port}");
+    println!();
+
+    // Load config for state directory
+    let config = Config::load().unwrap_or_default();
+    if let Err(e) = config.ensure_directories() {
+        eprintln!("Warning: Could not create directories: {e}");
+    }
+
+    // Create server config
+    let gateway_config = GatewayConfig::new(gateway_host, gateway_port, gateway_token.to_string());
+    let server_config = ServerConfig::new(port, gateway_config, config.data_path.clone());
+
+    // Set up runtime
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc_handler(r);
+
+    rt.block_on(async {
+        // Initialize tracing
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive(tracing::Level::INFO.into()),
+            )
+            .init();
+
+        match synheart_sensor_agent::server::run(server_config).await {
+            Ok((addr, shutdown_tx)) => {
+                println!("Server listening on http://{addr}");
+                println!();
+                println!("Chrome extension should POST to: http://{addr}/ingest");
+                println!();
+                println!("Press Ctrl+C to stop");
+                println!();
+
+                // Wait for Ctrl+C
+                while running.load(Ordering::SeqCst) {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+
+                println!();
+                println!("Shutting down server...");
+                let _ = shutdown_tx.send(());
+            }
+            Err(e) => {
+                eprintln!("Failed to start server: {e}");
+                std::process::exit(1);
+            }
+        }
+    });
 }
 
 fn cmd_pause() {
@@ -511,4 +902,29 @@ fn ctrlc_handler(running: Arc<AtomicBool>) {
         running.store(false, Ordering::SeqCst);
     })
     .expect("Error setting Ctrl+C handler");
+}
+
+/// Create gateway client from CLI args or runtime directory.
+#[cfg(feature = "gateway")]
+fn create_gateway_client(
+    port: Option<u16>,
+    token: Option<String>,
+) -> Result<BlockingGatewayClient, synheart_sensor_agent::GatewayError> {
+    // If both port and token are provided, use them directly
+    if let (Some(p), Some(t)) = (port, token.clone()) {
+        let config = GatewayConfig::new("127.0.0.1", p, t);
+        return BlockingGatewayClient::new(config);
+    }
+
+    // Try to load from runtime directory
+    match BlockingGatewayClient::from_runtime() {
+        Ok(client) => Ok(client),
+        Err(e) => {
+            // If partial args provided, try to fill in the gaps
+            if port.is_some() || token.is_some() {
+                eprintln!("Warning: Partial gateway config provided, trying runtime directory...");
+            }
+            Err(e)
+        }
+    }
 }
