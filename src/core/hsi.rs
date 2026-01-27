@@ -355,6 +355,39 @@ impl HsiBuilder {
                 evidence_source_ids: Some(vec![source_id.clone()]),
                 notes: Some("Micro-adjustments and hesitation".to_string()),
             },
+            // Typing cadence stability (already 0-1)
+            HsiAxisReading {
+                axis: "typing_cadence_stability".to_string(),
+                score: Some(features.keyboard.typing_cadence_stability),
+                confidence,
+                window_id: window_id.clone(),
+                direction: Some(HsiDirection::HigherIsMore),
+                unit: None,
+                evidence_source_ids: Some(vec![source_id.clone()]),
+                notes: Some("Rhythmic consistency of typing".to_string()),
+            },
+            // Typing gap ratio (already 0-1)
+            HsiAxisReading {
+                axis: "typing_gap_ratio".to_string(),
+                score: Some(features.keyboard.typing_gap_ratio),
+                confidence,
+                window_id: window_id.clone(),
+                direction: Some(HsiDirection::HigherIsLess),
+                unit: Some("ratio".to_string()),
+                evidence_source_ids: Some(vec![source_id.clone()]),
+                notes: Some("Proportion of inter-tap intervals classified as gaps".to_string()),
+            },
+            // Typing interaction intensity (already 0-1)
+            HsiAxisReading {
+                axis: "typing_interaction_intensity".to_string(),
+                score: Some(features.keyboard.typing_interaction_intensity),
+                confidence,
+                window_id: window_id.clone(),
+                direction: Some(HsiDirection::HigherIsMore),
+                unit: None,
+                evidence_source_ids: Some(vec![source_id.clone()]),
+                notes: Some("Composite of speed, cadence stability, and gap behavior".to_string()),
+            },
         ];
 
         // Build axes
@@ -414,6 +447,10 @@ impl HsiBuilder {
                 serde_json::Number::from_f64(features.mouse.click_rate)
                     .unwrap_or(serde_json::Number::from(0)),
             ),
+        );
+        meta.insert(
+            "typing_tap_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(features.keyboard.typing_tap_count)),
         );
 
         HsiSnapshot {

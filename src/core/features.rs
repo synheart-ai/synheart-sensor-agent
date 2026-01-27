@@ -24,6 +24,14 @@ pub struct KeyboardFeatures {
     pub burst_index: f64,
     /// Ratio of active typing time to total window time
     pub session_continuity: f64,
+    /// Total number of discrete keyboard tap events
+    pub typing_tap_count: u32,
+    /// Normalized rhythmic consistency score (0-1, higher = more regular timing)
+    pub typing_cadence_stability: f64,
+    /// Proportion of inter-tap intervals classified as gaps
+    pub typing_gap_ratio: f64,
+    /// Composite metric combining speed, cadence stability, and gap behavior (0-1)
+    pub typing_interaction_intensity: f64,
 }
 
 /// Mouse-derived behavioral features.
@@ -153,6 +161,28 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
     let active_time_ms: i64 = active_intervals.iter().sum();
     let session_continuity = (active_time_ms as f64 / 1000.0) / window_duration;
 
+    // Typing tap count: total discrete keyboard tap events (key presses)
+    let typing_tap_count = key_press_count as u32;
+
+    // Typing cadence stability: normalized rhythmic consistency (0-1, higher = more regular)
+    // Inverse relationship with latency variability
+    let typing_cadence_stability = 1.0 / (1.0 + latency_variability / 100.0);
+
+    // Typing gap ratio: proportion of inter-tap intervals classified as gaps
+    let typing_gap_ratio = if intervals.is_empty() {
+        0.0
+    } else {
+        pause_count as f64 / intervals.len() as f64
+    };
+
+    // Typing interaction intensity: composite metric (0-1)
+    // Combines normalized speed, cadence stability, and inverse gap ratio
+    let normalized_speed = (typing_rate / 10.0).min(1.0); // Normalize to ~10 keys/sec max
+    let typing_interaction_intensity = (normalized_speed * 0.4
+        + typing_cadence_stability * 0.3
+        + (1.0 - typing_gap_ratio) * 0.3)
+        .clamp(0.0, 1.0);
+
     KeyboardFeatures {
         typing_rate,
         pause_count,
@@ -161,6 +191,10 @@ fn compute_keyboard_features(events: &[KeyboardEvent], window_duration: f64) -> 
         hold_time_mean,
         burst_index,
         session_continuity: session_continuity.min(1.0), // Cap at 1.0
+        typing_tap_count,
+        typing_cadence_stability,
+        typing_gap_ratio,
+        typing_interaction_intensity,
     }
 }
 
@@ -380,5 +414,103 @@ mod tests {
         assert!(signals.friction >= 0.0 && signals.friction <= 1.0);
         assert!(signals.motor_stability >= 0.0 && signals.motor_stability <= 1.0);
         assert!(signals.focus_continuity_proxy >= 0.0 && signals.focus_continuity_proxy <= 1.0);
+    }
+
+    #[test]
+    fn test_typing_tap_count() {
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 200),
+            make_keyboard_event(false, 250),
+        ];
+
+        let features = compute_keyboard_features(&events, 1.0);
+        assert_eq!(features.typing_tap_count, 3); // 3 key presses
+    }
+
+    #[test]
+    fn test_typing_cadence_stability_bounds() {
+        // Empty events should give default (which uses 0 variability)
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert!(
+            features_empty.typing_cadence_stability >= 0.0
+                && features_empty.typing_cadence_stability <= 1.0
+        );
+
+        // Regular typing should have high cadence stability
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 200),
+            make_keyboard_event(false, 250),
+        ];
+        let features = compute_keyboard_features(&events, 1.0);
+        assert!(
+            features.typing_cadence_stability >= 0.0 && features.typing_cadence_stability <= 1.0
+        );
+        // Regular intervals should yield high stability
+        assert!(features.typing_cadence_stability > 0.5);
+    }
+
+    #[test]
+    fn test_typing_gap_ratio_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert_eq!(features_empty.typing_gap_ratio, 0.0);
+
+        // Fast typing with no pauses
+        let events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 100),
+            make_keyboard_event(false, 150),
+        ];
+        let features = compute_keyboard_features(&events, 1.0);
+        assert!(features.typing_gap_ratio >= 0.0 && features.typing_gap_ratio <= 1.0);
+        assert_eq!(features.typing_gap_ratio, 0.0); // No gaps in fast typing
+
+        // Typing with pauses (>500ms gaps)
+        let events_with_gaps = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 50),
+            make_keyboard_event(true, 600), // 600ms gap = pause
+            make_keyboard_event(false, 650),
+        ];
+        let features_gaps = compute_keyboard_features(&events_with_gaps, 1.0);
+        assert!(features_gaps.typing_gap_ratio > 0.0); // Should have gaps
+    }
+
+    #[test]
+    fn test_typing_interaction_intensity_bounds() {
+        let features_empty = compute_keyboard_features(&[], 10.0);
+        assert!(
+            features_empty.typing_interaction_intensity >= 0.0
+                && features_empty.typing_interaction_intensity <= 1.0
+        );
+
+        // High intensity: fast, regular, no gaps
+        let fast_events = vec![
+            make_keyboard_event(true, 0),
+            make_keyboard_event(false, 30),
+            make_keyboard_event(true, 60),
+            make_keyboard_event(false, 90),
+            make_keyboard_event(true, 120),
+            make_keyboard_event(false, 150),
+            make_keyboard_event(true, 180),
+            make_keyboard_event(false, 210),
+            make_keyboard_event(true, 240),
+            make_keyboard_event(false, 270),
+        ];
+        let features = compute_keyboard_features(&fast_events, 1.0);
+        assert!(
+            features.typing_interaction_intensity >= 0.0
+                && features.typing_interaction_intensity <= 1.0
+        );
+        // Fast regular typing should have moderate to high intensity
+        assert!(features.typing_interaction_intensity > 0.3);
     }
 }
