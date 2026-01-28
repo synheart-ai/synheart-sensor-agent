@@ -20,7 +20,7 @@ server = ["axum", "tower-http", "flux", "gateway", "tracing", "tracing-subscribe
 [dependencies]
 # Synheart Flux for baseline tracking and HSI enrichment (optional)
 
-synheart-flux = { git = "https://github.com/synheart-ai/synheart-flux", optional = true }
+synheart-flux = { version = "0.1.1", git = "https://github.com/synheart-ai/synheart-flux", optional = true }
 # HTTP client for gateway sync (optional)
 # Note: TLS features changed in reqwest 0.12+, using rustls (default provider) for TLS support
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false, optional = true }
