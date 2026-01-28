@@ -1,6 +1,6 @@
 [package]
 name = "synheart-sensor-agent"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Privacy-first PC background sensor for behavioral research"
 license = "Apache-2.0"
