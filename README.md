@@ -1,11 +1,19 @@
 # Synheart Sensor Agent
 
-[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/synheart-ai/synheart-sensor-agent?sort=semver)](https://github.com/synheart-ai/synheart-sensor-agent/releases)
+
+
+
+[![CI](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/ci.yml)
 [![Issues](https://img.shields.io/github/issues/synheart-ai/synheart-sensor-agent)](https://github.com/synheart-ai/synheart-sensor-agent/issues)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Release](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/release.yml/badge.svg)](https://github.com/synheart-ai/synheart-sensor-agent/actions/workflows/release.yml)
+[![Crates.io](https://img.shields.io/crates/v/synheart-sensor-agent/.svg)](https://crates.io/crates/synheart-sensor-agent)
+[![docs.rs](https://img.shields.io/docsrs/synheart-sensor-agent)](https://docs.rs/synheart-sensor-agent)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 [![Security Policy](https://img.shields.io/badge/security-policy-blue)](SECURITY.md)
+
+
+
 
 A privacy-first PC background sensor that captures keyboard and mouse interaction timing (not content) for behavioral research.
 
